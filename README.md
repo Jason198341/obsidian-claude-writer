@@ -101,3 +101,8 @@ Claude Writer bridges Obsidian and Claude Code CLI using `child_process.spawn`. 
 ## License
 
 MIT
+
+---
+
+Built by [jasonmoon](https://jasonmoon.dev) — Full-stack developer, AI-native tools & creative automation.
+
