@@ -1,7 +1,7 @@
 {
   "id": "claude-writer",
   "name": "Claude Writer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minAppVersion": "1.5.0",
   "description": "AI writing assistant powered by Claude Code CLI — rewrite, restructure, summarize, translate, explain, and visualize with your Claude subscription",
   "author": "jasonmoon",
