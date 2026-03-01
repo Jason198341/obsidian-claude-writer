@@ -131,10 +131,10 @@ export class ClaudeWriterView extends ItemView {
   triggerCommand(cmdId: string, selection: string) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
 
-    // answer-questions is handled separately
+    // answer-questions is handled separately — uses full document
     if (cmdId === "answer-questions") {
-      const active = this.app.workspace.getActiveViewOfType(MarkdownView);
-      if (active) this.triggerAnswerQuestions(active.editor);
+      const editor = this.findMarkdownEditor();
+      if (editor) this.triggerAnswerQuestions(editor);
       return;
     }
 
@@ -158,6 +158,32 @@ export class ClaudeWriterView extends ItemView {
     this.isExplainMode = false;
     this.isVizMode = false;
     this.executeCommand(cmdId);
+  }
+
+  /** Find a markdown editor — prefer lastEditor, fallback to workspace scan */
+  private findMarkdownEditor(): any | null {
+    // 1. Use tracked lastEditor (set by active-leaf-change)
+    if (this.lastEditor) {
+      try {
+        const ed = this.lastEditor.editor;
+        if (ed && typeof ed.getValue === "function") return ed;
+      } catch {}
+    }
+    // 2. Fallback: find any open MarkdownView
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (active) {
+      this.lastEditor = { editor: active.editor, leaf: active.leaf };
+      return active.editor;
+    }
+    // 3. Scan all leaves
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view as any;
+      if (view?.editor) {
+        this.lastEditor = { editor: view.editor, leaf };
+        return view.editor;
+      }
+    }
+    return null;
   }
 
   // ─── Answer Questions (EPUB++ integration) ──────
@@ -325,7 +351,7 @@ export class ClaudeWriterView extends ItemView {
 
     // ── Command grid (PRIMARY) ──
     this.cmdGrid = c.createDiv("cw-cmd-grid");
-    const SPECIAL_IDS = new Set(["custom", "explain", "visualize"]);
+    const SPECIAL_IDS = new Set(["custom", "explain", "visualize", "answer-questions"]);
     const topCmds = COMMANDS.filter(cmd => !SPECIAL_IDS.has(cmd.id));
     for (const cmd of topCmds) {
       const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn", attr: { role: "button", tabindex: "0", title: cmd.desc } });
@@ -335,7 +361,7 @@ export class ClaudeWriterView extends ItemView {
       btn.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.onCommandClick(cmd.id); } });
       this.actionBtns.set(cmd.id, btn);
     }
-    // Explain + Visualize + Custom (full width)
+    // Explain + Visualize + Custom (full width, need selection)
     for (const id of ["explain", "visualize", "custom"]) {
       const cmd = COMMANDS.find(c => c.id === id)!;
       const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-full", attr: { role: "button", tabindex: "0", title: cmd.desc } });
@@ -343,6 +369,15 @@ export class ClaudeWriterView extends ItemView {
       btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
       btn.addEventListener("click", () => this.onCommandClick(id));
       this.actionBtns.set(id, btn);
+    }
+    // Answer Questions (full width, always active — no selection needed)
+    {
+      const cmd = COMMANDS.find(c => c.id === "answer-questions")!;
+      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-full cw-cmd-no-sel", attr: { role: "button", tabindex: "0", title: cmd.desc } });
+      btn.createEl("span", { text: cmd.icon, cls: "cw-cmd-icon" });
+      btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
+      btn.addEventListener("click", () => this.onCommandClick("answer-questions"));
+      this.actionBtns.set("answer-questions", btn);
     }
 
     this.selectionHint = c.createDiv("cw-selection-hint");
@@ -624,11 +659,11 @@ export class ClaudeWriterView extends ItemView {
   private onCommandClick(cmdId: string) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
 
-    // answer-questions doesn't need a selection
+    // answer-questions doesn't need a selection — uses full document
     if (cmdId === "answer-questions") {
-      const active = this.app.workspace.getActiveViewOfType(MarkdownView);
-      if (!active) { new Notice("마크다운 파일을 열어주세요"); return; }
-      this.triggerAnswerQuestions(active.editor);
+      const editor = this.findMarkdownEditor();
+      if (!editor) { new Notice("마크다운 파일을 열어주세요"); return; }
+      this.triggerAnswerQuestions(editor);
       return;
     }
 
