@@ -1,0 +1,245 @@
+/* ═══════════════════════════════════════════════
+   Claude Writer v3 — Full Rebuild
+   ═══════════════════════════════════════════════ */
+
+.cw-panel {
+  padding: 10px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+/* ─── Header ─────────────────────────────────── */
+.cw-header { padding-bottom: 4px; }
+.cw-title-row { display: flex; align-items: center; justify-content: space-between; }
+.cw-title { font-weight: 700; font-size: 14px; color: var(--text-normal); letter-spacing: -0.3px; }
+
+.cw-template-badge {
+  font-size: 11px; padding: 3px 8px; border-radius: 4px;
+  background: var(--interactive-accent); color: var(--text-on-accent);
+  font-weight: 600; margin-top: 4px; display: inline-block;
+}
+
+/* ─── Status Badge ───────────────────────────── */
+.cw-status-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.cw-badge-idle { background: var(--background-secondary); color: var(--text-muted); }
+.cw-badge-processing { background: var(--background-modifier-success); color: var(--text-on-accent); animation: cw-pulse 1.5s ease-in-out infinite; }
+.cw-badge-done { background: var(--background-modifier-success); color: var(--text-on-accent); }
+.cw-badge-error { background: var(--background-modifier-error); color: var(--text-on-accent); }
+@keyframes cw-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* ─── Tone Bar ───────────────────────────────── */
+.cw-tone-bar {
+  display: flex; gap: 4px; flex-wrap: wrap;
+}
+.cw-tone-btn {
+  padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 500;
+  border: 1px solid var(--background-modifier-border); background: var(--background-secondary);
+  color: var(--text-muted); cursor: pointer; transition: all 0.15s;
+}
+.cw-tone-btn:hover { border-color: var(--text-accent); color: var(--text-normal); }
+.cw-tone-active {
+  background: var(--interactive-accent) !important; color: var(--text-on-accent) !important;
+  border-color: var(--interactive-accent) !important;
+}
+
+/* ─── Toolbar ────────────────────────────────── */
+.cw-toolbar { display: flex; align-items: center; gap: 6px; }
+.cw-select-sm {
+  padding: 3px 6px; border-radius: 4px; font-size: 11px; font-family: inherit;
+  border: 1px solid var(--background-modifier-border); background: var(--background-primary);
+  color: var(--text-normal); cursor: pointer;
+}
+.cw-select-sm:focus { border-color: var(--text-accent); outline: none; }
+
+/* ─── Context Banner ─────────────────────────── */
+.cw-context-banner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px; border-radius: 6px; font-size: 11px;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--interactive-accent);
+  color: var(--text-normal);
+}
+.cw-context-banner-text { flex: 1; }
+.cw-context-banner-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.cw-context-info { font-size: 10px; color: var(--text-muted); padding: 2px 0; font-style: italic; }
+
+/* ─── Command Grid (PRIMARY UI) ──────────────── */
+.cw-cmd-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+  transition: opacity 0.2s;
+}
+.cw-cmd-full { grid-column: 1 / -1; }
+.cw-no-selection { opacity: 0.4; pointer-events: none; }
+
+.cw-cmd-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 8px 4px; border-radius: 6px;
+  background: var(--background-secondary); border: 1px solid transparent;
+  cursor: pointer; transition: all 0.15s; user-select: none;
+}
+.cw-cmd-btn:hover {
+  background: var(--background-secondary-alt);
+  border-color: var(--background-modifier-border);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+.cw-cmd-btn:active { transform: scale(0.97); }
+.cw-cmd-active {
+  border-color: var(--interactive-accent) !important;
+  background: var(--background-primary-alt) !important;
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+.cw-cmd-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
+
+.cw-cmd-icon { font-size: 16px; }
+.cw-cmd-label { font-weight: 600; font-size: 10px; color: var(--text-normal); margin-top: 2px; }
+
+.cw-selection-hint {
+  font-size: 10px; color: var(--text-faint); text-align: center; padding: 2px 0;
+}
+
+/* ─── Explain Level Picker ───────────────────── */
+.cw-explain-row { display: flex; flex-direction: column; gap: 6px; }
+.cw-level-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
+.cw-level-btn {
+  display: flex; flex-direction: column; align-items: flex-start;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary); transition: all 0.15s;
+}
+.cw-level-btn:hover {
+  border-color: var(--interactive-accent);
+  background: var(--background-primary-alt);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+.cw-level-num {
+  font-size: 16px; font-weight: 700; color: var(--interactive-accent);
+  line-height: 1;
+}
+.cw-level-label { font-size: 11px; font-weight: 600; color: var(--text-normal); margin-top: 2px; }
+.cw-level-desc { font-size: 9px; color: var(--text-muted); margin-top: 1px; }
+
+/* ─── Visualize Cards ────────────────────────── */
+.cw-viz-row { display: flex; flex-direction: column; gap: 6px; }
+.cw-viz-cards { display: flex; flex-direction: column; gap: 4px; }
+.cw-viz-card {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary); transition: all 0.15s;
+}
+.cw-viz-card:hover {
+  border-color: var(--interactive-accent);
+  background: var(--background-primary-alt);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  transform: translateX(2px);
+}
+.cw-viz-card-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+.cw-viz-card-info { flex: 1; min-width: 0; }
+.cw-viz-card-name { font-size: 12px; font-weight: 600; color: var(--text-normal); }
+.cw-viz-card-desc { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+.cw-viz-card-type {
+  font-size: 9px; color: var(--text-faint); margin-top: 2px;
+  font-family: var(--font-monospace); opacity: 0.7;
+}
+
+/* ─── Custom Prompt ──────────────────────────── */
+.cw-custom-row { display: flex; flex-direction: column; gap: 6px; }
+.cw-custom-input {
+  width: 100%; min-height: 55px; padding: 8px; border-radius: 6px; font-size: 12px;
+  border: 1px solid var(--background-modifier-border); background: var(--background-primary);
+  color: var(--text-normal); resize: vertical; font-family: inherit;
+}
+.cw-custom-input:focus { border-color: var(--text-accent); outline: none; }
+.cw-custom-actions { display: flex; gap: 4px; justify-content: flex-end; }
+
+/* ─── Sections ───────────────────────────────── */
+.cw-section { display: flex; flex-direction: column; gap: 3px; }
+.cw-section-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted);
+}
+
+.cw-original-summary {
+  font-size: 11px; color: var(--text-muted); padding: 4px 8px;
+  background: var(--background-secondary); border-radius: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.cw-text-box {
+  padding: 10px 12px; border-radius: 6px; font-size: 12.5px; line-height: 1.65;
+  white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto;
+}
+.cw-result {
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal); min-height: 50px;
+}
+.cw-result.cw-streaming {
+  border-color: var(--interactive-accent);
+}
+.cw-result.cw-streaming::after {
+  content: "▋"; animation: cw-blink 0.8s step-end infinite; color: var(--text-accent);
+}
+@keyframes cw-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+.cw-output-header { display: flex; align-items: center; justify-content: space-between; }
+
+/* ─── Action Buttons ─────────────────────────── */
+.cw-action-row { display: flex; gap: 4px; margin-top: 6px; justify-content: flex-end; flex-wrap: wrap; }
+
+.cw-btn {
+  padding: 4px 12px; border-radius: 5px; font-size: 11px; font-weight: 500;
+  cursor: pointer; border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary); color: var(--text-normal); transition: all 0.15s;
+}
+.cw-btn:hover { background: var(--background-secondary-alt); }
+.cw-btn-xs { padding: 2px 8px; font-size: 10px; border-radius: 4px; }
+.cw-btn-primary {
+  background: var(--interactive-accent); color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+.cw-btn-primary:hover { opacity: 0.9; }
+.cw-btn-danger {
+  color: var(--text-error, #ef4444);
+  border-color: var(--background-modifier-error, #ef444444);
+}
+.cw-btn-danger:hover { background: var(--background-modifier-error-hover, #ef444422); }
+
+/* ─── Account (Collapsible Bottom) ───────────── */
+.cw-account-details {
+  margin-top: auto; padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: 11px;
+}
+.cw-account-summary {
+  cursor: pointer; color: var(--text-muted); list-style: none;
+  display: flex; align-items: center; gap: 6px; padding: 4px 0;
+}
+.cw-account-summary::-webkit-details-marker { display: none; }
+.cw-account-summary::before { content: "👤"; font-size: 12px; }
+.cw-account-summary::after { content: "▾"; font-size: 9px; margin-left: auto; }
+details[open] > .cw-account-summary::after { content: "▴"; }
+
+.cw-account-email {
+  font-size: 11px; color: var(--text-normal); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cw-account-plan { font-size: 10px; color: var(--text-muted); }
+.cw-plan-active { color: var(--text-accent); font-weight: 600; }
+
+.cw-account-body {
+  display: flex; gap: 4px; padding: 6px 0 2px 20px;
+}
+
+/* ─── Utility ────────────────────────────────── */
+.cw-hidden { display: none !important; }
+
+.cw-text-box::-webkit-scrollbar, .cw-panel::-webkit-scrollbar { width: 4px; }
+.cw-text-box::-webkit-scrollbar-track, .cw-panel::-webkit-scrollbar-track { background: transparent; }
+.cw-text-box::-webkit-scrollbar-thumb, .cw-panel::-webkit-scrollbar-thumb {
+  background: var(--background-modifier-border); border-radius: 4px;
+}

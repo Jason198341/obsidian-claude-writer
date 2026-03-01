@@ -1,0 +1,16 @@
+{
+  "name": "obsidian-claude-writer",
+  "version": "1.0.0",
+  "description": "Obsidian writing assistant powered by Claude Code CLI",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "obsidian": "latest",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}
