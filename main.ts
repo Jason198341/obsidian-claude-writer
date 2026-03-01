@@ -154,6 +154,17 @@ Rules:
 - Keep it clean, readable, not overly complex
 - Output ONLY the visualization code, nothing else`;
 
+// ─── Reading Note Prompt ────────────────────────────
+
+export const READING_NOTE_PROMPT = `당신은 독서 노트 편집 전문가입니다. 아래의 Q&A 쌍들을 하나의 구조화된 학습 노트로 재구성하세요.
+
+규칙:
+1. 단순히 Q&A를 나열하지 말 것. 내용을 주제별로 재구조화할 것.
+2. 구조: ## 핵심 개념 → ## 작동 원리 → ## 주요 용어 → ## 인사이트 → ## 추가 탐구 질문
+3. 각 섹션에 해당하는 내용이 없으면 해당 섹션을 생략.
+4. 중복 내용은 병합. 상호 연결이 있으면 명시.
+5. 한국어. 마크다운 사용. 설명 없이 결과만.`;
+
 // ─── Settings ────────────────────────────────────────
 
 export interface ClaudeWriterSettings {
