@@ -1,6 +1,6 @@
 import { ItemView, WorkspaceLeaf, MarkdownView, Notice } from "obsidian";
 import type ClaudeWriterPlugin from "./main";
-import { callClaude, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, READING_NOTE_PROMPT } from "./main";
+import { callClaude, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, READING_NOTE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions } from "./main";
 import type { CmdDef } from "./main";
 
 export const VIEW_TYPE = "claude-writer-view";
@@ -130,6 +130,14 @@ export class ClaudeWriterView extends ItemView {
 
   triggerCommand(cmdId: string, selection: string) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
+
+    // answer-questions is handled separately
+    if (cmdId === "answer-questions") {
+      const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (active) this.triggerAnswerQuestions(active.editor);
+      return;
+    }
+
     this.currentSelection = selection || "";
     if (!this.currentSelection) { new Notice("텍스트를 선택해주세요"); return; }
 
@@ -150,6 +158,111 @@ export class ClaudeWriterView extends ItemView {
     this.isExplainMode = false;
     this.isVizMode = false;
     this.executeCommand(cmdId);
+  }
+
+  // ─── Answer Questions (EPUB++ integration) ──────
+
+  triggerAnswerQuestions(editor: any) {
+    if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
+
+    const content = editor.getValue();
+    const { questions, title, author } = parseQuestions(content);
+    const unanswered = questions.filter(q => !q.answered);
+
+    if (questions.length === 0) {
+      new Notice("❓ 질문이 없습니다. EPUB++ 독서노트에서 사용하세요.");
+      return;
+    }
+
+    if (unanswered.length === 0) {
+      new Notice(`✅ 모든 질문에 답변 완료 (${questions.length}건)`);
+      return;
+    }
+
+    new Notice(`❓ ${unanswered.length}건 미답변 발견 (전체 ${questions.length}건). AI 답변 시작...`);
+
+    // Show progress in sidebar
+    this.activeCommand = "answer-questions";
+    this.outputContent.empty();
+    this.outputContent.addClass("cw-streaming");
+    this.outputSection.removeClass("cw-hidden");
+    this.inputSection.addClass("cw-hidden");
+    this.setState("processing");
+
+    this.executeAnswerQuestions(editor, unanswered, title, author);
+  }
+
+  private async executeAnswerQuestions(
+    editor: any,
+    unanswered: { lineIndex: number; question: string; passage: string }[],
+    title: string,
+    author: string,
+  ) {
+    const claudePath = this.plugin.getClaudePath();
+    const model = this.plugin.settings.model;
+    let completed = 0;
+    let failed = 0;
+
+    // Process bottom-to-top so line insertions don't shift earlier positions
+    const sorted = [...unanswered].sort((a, b) => b.lineIndex - a.lineIndex);
+
+    for (const q of sorted) {
+      completed++;
+      this.outputContent.setText(`🤖 AI 답변 생성 중... ${completed}/${unanswered.length}\n\n❓ ${q.question}`);
+
+      try {
+        const answer = await this.callClaudeSync(
+          claudePath, model, title, author, q.passage, q.question,
+        );
+
+        // Build the answer block: > [!tip]- 🤖 AI 답변\n> answer lines
+        const answerLines = answer.split("\n").map((l: string) => `> ${l}`).join("\n");
+        const block = `\n> [!tip]- 🤖 AI 답변\n${answerLines}`;
+
+        // Insert after the ❓ line
+        const lineText = editor.getLine(q.lineIndex);
+        editor.replaceRange(block, { line: q.lineIndex, ch: lineText.length });
+      } catch (err: any) {
+        failed++;
+        const errorBlock = `\n> [!warning]- ⚠️ AI 응답 실패\n> ${err.message || err}`;
+        const lineText = editor.getLine(q.lineIndex);
+        editor.replaceRange(errorBlock, { line: q.lineIndex, ch: lineText.length });
+      }
+    }
+
+    this.outputContent.removeClass("cw-streaming");
+    const msg = `✅ AI 답변 완료: ${unanswered.length - failed}건 성공` + (failed > 0 ? ` / ${failed}건 실패` : "");
+    this.outputContent.setText(msg);
+    new Notice(msg);
+    this.setState("done");
+  }
+
+  /** Synchronous (Promise-based) wrapper around callClaude for sequential processing */
+  private callClaudeSync(
+    claudePath: string, model: string,
+    bookTitle: string, bookAuthor: string,
+    passage: string, question: string,
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const systemPrompt = ANSWER_QUESTION_PROMPT
+        .replace("{TITLE}", bookTitle)
+        .replace("{AUTHOR}", bookAuthor);
+
+      const userText = `📖 원문:\n${passage}\n\n❓ 질문:\n${question}`;
+      let result = "";
+
+      const handle = callClaude(
+        claudePath, model, systemPrompt, userText,
+        0, "auto",
+        (chunk) => { result += chunk; },
+        () => { resolve(result.trim()); },
+        (err) => { reject(new Error(err)); },
+        false, // not replace mode
+      );
+
+      // Safety: store kill handle in case user cancels
+      this.killProcess = handle.kill;
+    });
   }
 
   // ─── Build UI ────────────────────────────────────
@@ -510,6 +623,15 @@ export class ClaudeWriterView extends ItemView {
 
   private onCommandClick(cmdId: string) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
+
+    // answer-questions doesn't need a selection
+    if (cmdId === "answer-questions") {
+      const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (!active) { new Notice("마크다운 파일을 열어주세요"); return; }
+      this.triggerAnswerQuestions(active.editor);
+      return;
+    }
+
     const selection = this.getEditorSelection();
     if (!selection) { new Notice("텍스트를 선택해주세요"); return; }
     this.currentSelection = selection;

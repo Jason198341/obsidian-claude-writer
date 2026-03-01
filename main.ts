@@ -89,6 +89,8 @@ export const COMMANDS: CmdDef[] = [
     prompt: "" },
   { id: "custom", name: "자유 프롬프트 (Custom)", label: "자유", icon: "💬", desc: "직접 지시",
     prompt: "" },
+  { id: "answer-questions", name: "독서노트 AI 답변 (Answer Questions)", label: "AI 답변", icon: "❓", desc: "미답변 질문 자동 답변",
+    prompt: "" },
 ];
 
 // ─── Explain Levels ──────────────────────────────────
@@ -164,6 +166,91 @@ export const READING_NOTE_PROMPT = `당신은 독서 노트 편집 전문가입�
 3. 각 섹션에 해당하는 내용이 없으면 해당 섹션을 생략.
 4. 중복 내용은 병합. 상호 연결이 있으면 명시.
 5. 한국어. 마크다운 사용. 설명 없이 결과만.`;
+
+// ─── Answer Questions (EPUB++ integration) ──────────
+
+export const ANSWER_QUESTION_PROMPT = `당신은 독서 도우미입니다.
+책: "{TITLE}" ({AUTHOR})
+
+독자가 책의 한 구절을 읽고 질문했습니다.
+구절의 맥락을 고려하여 간결하게 답변해주세요.
+
+규칙:
+- 2~3문단, 한국어로 답변
+- 마크다운 서식 사용하지 마세요 (볼드, 헤더 등 금지)
+- 인사말이나 머리말 없이 바로 답변
+- 책의 맥락과 일반 지식을 결합하여 답변`;
+
+export interface ParsedQuestion {
+  lineIndex: number;       // line number of the ❓ line
+  question: string;        // question text
+  passage: string;         // surrounding quote passage
+  answered: boolean;       // whether [!tip] AI answer already exists
+}
+
+/** Parse a reading note to find ❓ questions and their answer status */
+export function parseQuestions(content: string): { questions: ParsedQuestion[]; title: string; author: string } {
+  const lines = content.split("\n");
+
+  // Extract title/author from heading: "# Title — 독서 하이라이트"
+  let title = "Unknown";
+  let author = "Unknown";
+  for (const line of lines) {
+    const headingMatch = line.match(/^#\s+(.+?)\s*—\s*독서\s*하이라이트/);
+    if (headingMatch) {
+      title = headingMatch[1].trim();
+    }
+    // Extract author from subtitle: "> 📚 AuthorName |"
+    const authorMatch = line.match(/^>\s*📚\s+(.+?)\s*\|/);
+    if (authorMatch) {
+      author = authorMatch[1].trim();
+    }
+  }
+
+  // Also try frontmatter tags: [독서노트, Title, Author]
+  const tagMatch = content.match(/tags:\s*\[독서노트,\s*(.+?)(?:,\s*(.+?))?\]/);
+  if (tagMatch) {
+    if (title === "Unknown" && tagMatch[1]) title = tagMatch[1].trim();
+    if (author === "Unknown" && tagMatch[2]) author = tagMatch[2].trim();
+  }
+
+  const questions: ParsedQuestion[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    // Match: > ❓ **question text**
+    const qMatch = lines[i].match(/^>\s*❓\s*\*\*(.+?)\*\*/);
+    if (!qMatch) continue;
+
+    const question = qMatch[1];
+
+    // Collect passage: walk backwards to find quote block text
+    let passage = "";
+    for (let j = i - 1; j >= 0; j--) {
+      const line = lines[j];
+      if (line.match(/^>\s*\[!quote\]/)) break;     // start of callout
+      if (!line.startsWith(">")) break;               // left the block
+      const text = line.replace(/^>\s*/, "").trim();
+      if (text && !text.startsWith("—") && !text.startsWith("❓")) {
+        passage = text + (passage ? "\n" + passage : "");
+      }
+    }
+
+    // Check if answered: look ahead for [!tip] block
+    let answered = false;
+    for (let j = i + 1; j < lines.length && j <= i + 5; j++) {
+      const line = lines[j].trim();
+      if (line === "") continue;
+      if (line.match(/^>\s*\[!tip\].*AI\s*답변/)) {
+        answered = true;
+      }
+      break; // only check the first non-empty line after
+    }
+
+    questions.push({ lineIndex: i, question, passage, answered });
+  }
+
+  return { questions, title, author };
+}
 
 // ─── Settings ────────────────────────────────────────
 
@@ -320,14 +407,26 @@ export default class ClaudeWriterPlugin extends Plugin {
 
     // Register editor commands
     for (const cmd of COMMANDS) {
-      this.addCommand({
-        id: cmd.id, name: cmd.name,
-        editorCallback: async (editor: Editor) => {
-          await this.activateView();
-          const view = this.getView();
-          if (view) view.triggerCommand(cmd.id, editor.getSelection());
-        },
-      });
+      if (cmd.id === "answer-questions") {
+        // answer-questions operates on the whole document, not a selection
+        this.addCommand({
+          id: cmd.id, name: cmd.name,
+          editorCallback: async (editor: Editor) => {
+            await this.activateView();
+            const view = this.getView();
+            if (view) view.triggerAnswerQuestions(editor);
+          },
+        });
+      } else {
+        this.addCommand({
+          id: cmd.id, name: cmd.name,
+          editorCallback: async (editor: Editor) => {
+            await this.activateView();
+            const view = this.getView();
+            if (view) view.triggerCommand(cmd.id, editor.getSelection());
+          },
+        });
+      }
     }
 
     // Right-click context menu
