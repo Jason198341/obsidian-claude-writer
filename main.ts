@@ -5,20 +5,18 @@ import { ClaudeWriterView, VIEW_TYPE } from "./view";
 
 export const TEMPLATE_PROMPTS: Record<string, { prompt: string; model: string; tone: string }> = {
   "회의록": {
-    prompt: `현대자동차 인도기술연구소 내장설계팀의 회의록 작성 전문가입니다.
-원문(현장 메모/단편적 키워드)을 완성된 회의록으로 변환하세요.
+    prompt: `회의록 작성 전문가입니다. 원문(현장 메모/단편적 키워드)을 완성된 회의록으로 변환하세요.
 구조: ## 기본정보(일시/참석자/장소) → ## 안건 → ## 결정 사항 → ## Action Items → ## 메모
-Action Items은 '- [ ] [내용] 📅 YYYY-MM-DD' 형식. 자동차 업계 약어(QU2, CFT, T/O 등) 유지. 설명 없이 결과만.`,
+Action Items은 '- [ ] [내용] 📅 YYYY-MM-DD' 형식. 업계 약어는 그대로 유지. 설명 없이 결과만.`,
     model: "sonnet", tone: "격식체-보고",
   },
   "업무보고": {
-    prompt: `현대자동차 내장설계팀 주재원 업무보고서 작성.
-Executive Summary 3줄 이내. 현황 마크다운 표. 이슈는 영향도(H/M/L) 포함. 합니다/습니다 격식체.
+    prompt: `업무보고서 작성. Executive Summary 3줄 이내. 현황 마크다운 표. 이슈는 영향도(H/M/L) 포함. 합니다/습니다 격식체.
 Action Items은 '- [ ] [내용] 📅 YYYY-MM-DD' 형식. 설명 없이 결과만.`,
     model: "sonnet", tone: "격식체-보고",
   },
   "새프로젝트": {
-    prompt: `차종 개발 프로젝트 계획서 작성. 차종명, 목표, 마감, 담당자 구조화. 이슈 테이블 포함. 자동차 개발 일정 맥락 반영. 설명 없이 결과만.`,
+    prompt: `프로젝트 계획서 작성. 프로젝트명, 목표, 마감, 담당자 구조화. 이슈 테이블 포함. 설명 없이 결과만.`,
     model: "sonnet", tone: "격식체-보고",
   },
   "기술노트": {
@@ -79,7 +77,7 @@ export const COMMANDS: CmdDef[] = [
     prompt: "다음 영어 텍스트를 자연스러운 한국어로 번역. 설명 없이 결과만." },
   { id: "formalize-en", name: "영문보고서화 (Formalize EN)", label: "보고서화", icon: "📄", desc: "KR→EN 기술보고서",
     prompt: `한국어 자동차 기술 문서를 영문 기술 보고서로 변환.
-자동차 공학 용어(HMI, ADAS, BOM 등) 사용. 현대차 내부 문서 스타일(formal, concise).
+전문 기술 용어 사용. Formal, concise 스타일.
 숫자·부품명·코드는 정확히 보존. Executive Summary → Details → Action Items 구조. 영어만 출력. 설명 없이 결과만.` },
   { id: "insight", name: "인사이트 추출 (Insight)", label: "인사이트", icon: "💡", desc: "제텔노트용",
     prompt: "다음 텍스트에서 핵심 인사이트 1건 추출. 핵심 주장 1문장 → 근거 2~3개 → 연결 태그. 설명 없이 결과만." },

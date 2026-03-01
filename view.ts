@@ -1,24 +1,10 @@
 import { ItemView, WorkspaceLeaf, MarkdownView, Notice } from "obsidian";
 import type ClaudeWriterPlugin from "./main";
-import { callClaude, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, READING_NOTE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions } from "./main";
+import { callClaude, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions } from "./main";
 import type { CmdDef } from "./main";
 
 export const VIEW_TYPE = "claude-writer-view";
 type ViewState = "idle" | "processing" | "done" | "error";
-
-interface SessionEntry {
-  selectedText: string;
-  command: string;
-  response: string;
-  timestamp: number;
-}
-
-interface ReadingSession {
-  sourceFile: string;
-  startedAt: number;
-  entries: SessionEntry[];
-  isActive: boolean;
-}
 
 // ─── LRU Cache ───────────────────────────────────────
 
@@ -81,14 +67,6 @@ export class ClaudeWriterView extends ItemView {
   private currentDocPath = "";
   private currentTemplate = "";
   private scanAbortPath = "";
-
-  // Reading Session
-  private readingSession: ReadingSession | null = null;
-  private sessionBar: HTMLElement;
-  private sessionToggleBtn: HTMLElement;
-  private sessionCounter: HTMLElement;
-  private sessionGenerateBtn: HTMLElement;
-  private accumulateBtn: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: ClaudeWriterPlugin) {
     super(leaf);
@@ -341,14 +319,6 @@ export class ClaudeWriterView extends ItemView {
       .addEventListener("click", () => this.contextBanner.addClass("cw-hidden"));
     this.contextInfo = c.createDiv("cw-context-info cw-hidden");
 
-    // ── Reading Session bar ──
-    this.sessionBar = c.createDiv("cw-session-bar");
-    this.sessionToggleBtn = this.sessionBar.createEl("button", { text: "📖 읽기 세션", cls: "cw-btn cw-btn-session" });
-    this.sessionCounter = this.sessionBar.createEl("span", { text: "0건", cls: "cw-session-counter cw-hidden" });
-    this.sessionGenerateBtn = this.sessionBar.createEl("button", { text: "노트 생성", cls: "cw-btn cw-btn-primary cw-btn-xs cw-hidden" });
-    this.sessionToggleBtn.addEventListener("click", () => this.toggleReadingSession());
-    this.sessionGenerateBtn.addEventListener("click", () => this.generateReadingNote());
-
     // ── Command grid (PRIMARY) ──
     this.cmdGrid = c.createDiv("cw-cmd-grid");
     const SPECIAL_IDS = new Set(["custom", "explain", "visualize", "answer-questions"]);
@@ -432,8 +402,6 @@ export class ClaudeWriterView extends ItemView {
     this.dismissBtn = actionRow.createEl("button", { text: "닫기", cls: "cw-btn" });
     this.cancelBtn = actionRow.createEl("button", { text: "중단", cls: "cw-btn cw-btn-danger" });
     this.retryBtn = actionRow.createEl("button", { text: "다시 시도", cls: "cw-btn cw-btn-primary" });
-    this.accumulateBtn = actionRow.createEl("button", { text: "📖 축적", cls: "cw-btn cw-btn-accumulate" });
-
     this.applyBtn.addEventListener("click", () => this.applyResult());
     this.insertBelowBtn.addEventListener("click", () => this.insertBelow());
     this.insertCalloutBtn.addEventListener("click", () => this.insertAsCallout());
@@ -443,8 +411,6 @@ export class ClaudeWriterView extends ItemView {
     this.dismissBtn.addEventListener("click", () => { this.setState("idle"); new Notice("결과 닫힘 — 원문 유지"); });
     this.cancelBtn.addEventListener("click", () => { this.forceKill(); this.setState("idle"); });
     this.retryBtn.addEventListener("click", () => { if (this.isExplainMode) this.explainRow.removeClass("cw-hidden"); else this.executeCommand(this.activeCommand); });
-    this.accumulateBtn.addEventListener("click", () => this.addSessionEntry());
-
     // ── Account (collapsible, bottom) ──
     const accountDetails = c.createEl("details", { cls: "cw-account-details" });
     const accountSummary = accountDetails.createEl("summary", { cls: "cw-account-summary" });
@@ -973,130 +939,6 @@ export class ClaudeWriterView extends ItemView {
     this.setState("idle");
   }
 
-  // ─── Reading Session ─────────────────────────
-
-  private toggleReadingSession() {
-    if (this.readingSession?.isActive) {
-      const n = this.readingSession.entries.length;
-      this.readingSession = null;
-      this.sessionToggleBtn.removeClass("cw-session-active");
-      this.sessionToggleBtn.setText("📖 읽기 세션");
-      this.sessionCounter.addClass("cw-hidden");
-      this.sessionGenerateBtn.addClass("cw-hidden");
-      if (n > 0) new Notice(`세션 종료 (${n}건 미저장)`);
-      else new Notice("읽기 세션 종료");
-    } else {
-      this.readingSession = {
-        sourceFile: this.currentDocPath,
-        startedAt: Date.now(),
-        entries: [],
-        isActive: true,
-      };
-      this.sessionToggleBtn.addClass("cw-session-active");
-      this.sessionToggleBtn.setText("📖 읽기 중");
-      this.updateSessionCounter();
-      new Notice("읽기 세션 시작 — 텍스트 선택 후 설명을 요청하세요");
-    }
-  }
-
-  private updateSessionCounter() {
-    const n = this.readingSession?.entries.length || 0;
-    this.sessionCounter.setText(`${n}건`);
-    this.sessionCounter.removeClass("cw-hidden");
-    if (n > 0) this.sessionGenerateBtn.removeClass("cw-hidden");
-    else this.sessionGenerateBtn.addClass("cw-hidden");
-  }
-
-  private addSessionEntry() {
-    if (!this.readingSession?.isActive || !this.currentResult) return;
-    this.readingSession.entries.push({
-      selectedText: this.currentSelection,
-      command: this.activeCommand,
-      response: this.currentResult,
-      timestamp: Date.now(),
-    });
-    this.updateSessionCounter();
-    new Notice(`축적 완료 (${this.readingSession.entries.length}건)`);
-    this.setState("idle");
-  }
-
-  private generateReadingNote() {
-    if (!this.readingSession || this.readingSession.entries.length === 0) {
-      new Notice("축적된 항목이 없습니다");
-      return;
-    }
-
-    const entries = this.readingSession.entries;
-    let qaPayload = "";
-    for (let i = 0; i < entries.length; i++) {
-      const selPreview = entries[i].selectedText.length > 100
-        ? entries[i].selectedText.slice(0, 100) + "..."
-        : entries[i].selectedText;
-      qaPayload += `### Q${i + 1}: ${selPreview}\n${entries[i].response}\n\n`;
-    }
-
-    const sourceFile = this.readingSession.sourceFile;
-    const sourceBasename = sourceFile.replace(/\.md$/, "").split("/").pop() || "읽기노트";
-
-    this.currentResult = "";
-    this.outputContent.empty();
-    this.outputContent.addClass("cw-streaming");
-    this.outputContent.setText("읽기 노트 구조화 중...");
-    this.outputSection.removeClass("cw-hidden");
-    this.inputSection.addClass("cw-hidden");
-    this.setState("processing");
-
-    const prompt = READING_NOTE_PROMPT + `\n\n원본 문서: ${sourceBasename}\n총 ${entries.length}건의 Q&A`;
-    const model = entries.length >= 5 ? "sonnet" : "haiku";
-
-    const handle = callClaude(
-      this.plugin.getClaudePath(), model, prompt, qaPayload,
-      0, "auto",
-      (chunk) => { this.currentResult += chunk; this.outputContent.setText(this.currentResult); this.outputContent.scrollTop = this.outputContent.scrollHeight; },
-      async () => {
-        this.killProcess = null;
-        this.outputContent.removeClass("cw-streaming");
-
-        const date = new Date().toISOString().slice(0, 10);
-        const noteName = `${sourceBasename}_읽기노트`;
-        const notePath = `3_Resources/${noteName}.md`;
-        const frontmatter = `---\ntags: [읽기노트, 자동생성]\ncreated: ${date}\nmodified: ${date}\nstatus: reference\ncategory: resource\ntemplate: 파인만-노트\ndevice: home\nsource: "[[${sourceBasename}]]"\n---\n\n`;
-
-        try {
-          const existing = this.app.vault.getAbstractFileByPath(notePath);
-          if (existing) {
-            const existingContent = await this.app.vault.read(existing as any);
-            await this.app.vault.modify(existing as any, existingContent + "\n\n---\n\n" + this.currentResult);
-          } else {
-            await this.app.vault.create(notePath, frontmatter + this.currentResult);
-          }
-
-          if (this.lastEditor) {
-            const editor = this.lastEditor.editor;
-            const lastLine = editor.lastLine();
-            const lastLineText = editor.getLine(lastLine);
-            editor.replaceRange(`\n\n> 📖 [[${noteName}]]`, { line: lastLine, ch: lastLineText.length });
-          }
-
-          new Notice(`읽기 노트 생성 완료: ${noteName}`);
-        } catch (err: any) {
-          new Notice(`노트 생성 실패: ${err.message}`);
-        }
-
-        // Clear session
-        this.readingSession = null;
-        this.sessionToggleBtn.removeClass("cw-session-active");
-        this.sessionToggleBtn.setText("📖 읽기 세션");
-        this.sessionCounter.addClass("cw-hidden");
-        this.sessionGenerateBtn.addClass("cw-hidden");
-        this.setState("done");
-      },
-      (err) => { this.killProcess = null; this.outputContent.removeClass("cw-streaming"); this.setState("error"); this.outputContent.setText(`구조화 실패: ${err}`); },
-      false,
-    );
-    this.killProcess = handle.kill;
-  }
-
   // ─── Auth ────────────────────────────────────────
 
   private async refreshAuth() {
@@ -1158,7 +1000,6 @@ export class ClaudeWriterView extends ItemView {
           ar.removeClass("cw-hidden");
           hide(this.applyBtn); hide(this.insertBelowBtn); hide(this.insertCalloutBtn); hide(this.insertLinkBtn);
           hide(this.appendBtn); hide(this.copyBtn); hide(this.dismissBtn); hide(this.retryBtn);
-          hide(this.accumulateBtn);
           show(this.cancelBtn);
         }
         break;
@@ -1168,7 +1009,6 @@ export class ClaudeWriterView extends ItemView {
           ar.removeClass("cw-hidden"); hide(this.cancelBtn); hide(this.retryBtn);
           show(this.applyBtn); show(this.insertBelowBtn); show(this.insertCalloutBtn); show(this.insertLinkBtn);
           show(this.appendBtn); show(this.copyBtn); show(this.dismissBtn);
-          if (this.readingSession?.isActive) show(this.accumulateBtn); else hide(this.accumulateBtn);
         }
         break;
       case "error":
@@ -1177,7 +1017,6 @@ export class ClaudeWriterView extends ItemView {
           ar.removeClass("cw-hidden");
           hide(this.applyBtn); hide(this.insertBelowBtn); hide(this.insertCalloutBtn); hide(this.insertLinkBtn);
           hide(this.appendBtn); hide(this.copyBtn); hide(this.cancelBtn);
-          hide(this.accumulateBtn);
           show(this.dismissBtn); show(this.retryBtn);
         }
         break;
