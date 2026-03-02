@@ -1,6 +1,6 @@
 import { ItemView, WorkspaceLeaf, MarkdownView, Notice } from "obsidian";
 import type ClaudeWriterPlugin from "./main";
-import { callClaude, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions } from "./main";
+import { callClaude, callClaudeMobile, isMobile, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions } from "./main";
 import type { CmdDef } from "./main";
 
 export const VIEW_TYPE = "claude-writer-view";
@@ -138,6 +138,24 @@ export class ClaudeWriterView extends ItemView {
     this.executeCommand(cmdId);
   }
 
+  /** Route to desktop CLI or mobile bridge */
+  private callClaudeAuto(
+    model: string, systemPrompt: string, userText: string, maxChars: number, tone: string,
+    onChunk: (chunk: string) => void, onDone: () => void, onError: (err: string) => void,
+    replaceMode = true,
+  ): { kill: () => void } {
+    if (isMobile()) {
+      return callClaudeMobile(
+        this.plugin.settings.bridgeUrl, model, systemPrompt, userText, maxChars, tone,
+        onChunk, onDone, onError, replaceMode,
+      );
+    }
+    return callClaude(
+      this.plugin.getClaudePath(), model, systemPrompt, userText, maxChars, tone,
+      onChunk, onDone, onError, replaceMode,
+    );
+  }
+
   /** Find a markdown editor — prefer lastEditor, fallback to workspace scan */
   private findMarkdownEditor(): any | null {
     // 1. Use tracked lastEditor (set by active-leaf-change)
@@ -202,7 +220,6 @@ export class ClaudeWriterView extends ItemView {
     title: string,
     author: string,
   ) {
-    const claudePath = this.plugin.getClaudePath();
     const model = this.plugin.settings.model;
     let completed = 0;
     let failed = 0;
@@ -216,7 +233,7 @@ export class ClaudeWriterView extends ItemView {
 
       try {
         const answer = await this.callClaudeSync(
-          claudePath, model, title, author, q.passage, q.question,
+          model, title, author, q.passage, q.question,
         );
 
         // Build the answer block: > [!tip]- 🤖 AI 답변\n> answer lines
@@ -241,9 +258,9 @@ export class ClaudeWriterView extends ItemView {
     this.setState("done");
   }
 
-  /** Synchronous (Promise-based) wrapper around callClaude for sequential processing */
+  /** Synchronous (Promise-based) wrapper for sequential processing */
   private callClaudeSync(
-    claudePath: string, model: string,
+    model: string,
     bookTitle: string, bookAuthor: string,
     passage: string, question: string,
   ): Promise<string> {
@@ -255,16 +272,15 @@ export class ClaudeWriterView extends ItemView {
       const userText = `📖 원문:\n${passage}\n\n❓ 질문:\n${question}`;
       let result = "";
 
-      const handle = callClaude(
-        claudePath, model, systemPrompt, userText,
+      const handle = this.callClaudeAuto(
+        model, systemPrompt, userText,
         0, "auto",
         (chunk) => { result += chunk; },
         () => { resolve(result.trim()); },
         (err) => { reject(new Error(err)); },
-        false, // not replace mode
+        false,
       );
 
-      // Safety: store kill handle in case user cancels
       this.killProcess = handle.kill;
     });
   }
@@ -672,8 +688,8 @@ export class ClaudeWriterView extends ItemView {
 
     const userPayload = this.buildUserPayload(this.currentSelection);
 
-    const handle = callClaude(
-      this.plugin.getClaudePath(), this.modelSelect.value, enriched, userPayload,
+    const handle = this.callClaudeAuto(
+      this.modelSelect.value, enriched, userPayload,
       this.plugin.settings.maxChars, this.plugin.settings.tone,
       (chunk) => { this.currentResult += chunk; this.outputContent.setText(this.currentResult); this.outputContent.scrollTop = this.outputContent.scrollHeight; },
       () => { this.killProcess = null; this.outputContent.removeClass("cw-streaming"); this.setState("done"); },
@@ -702,8 +718,8 @@ export class ClaudeWriterView extends ItemView {
 
     const userPayload = this.buildUserPayload(this.currentSelection);
 
-    const handle = callClaude(
-      this.plugin.getClaudePath(), "haiku", VIZ_SUGGEST_PROMPT, userPayload,
+    const handle = this.callClaudeAuto(
+      "haiku", VIZ_SUGGEST_PROMPT, userPayload,
       0, "auto",
       (chunk) => { this.currentResult += chunk; },
       () => {
@@ -766,8 +782,8 @@ export class ClaudeWriterView extends ItemView {
     this.outputSection.removeClass("cw-hidden");
     this.setState("processing");
 
-    const handle = callClaude(
-      this.plugin.getClaudePath(), this.modelSelect.value, enriched, userPayload,
+    const handle = this.callClaudeAuto(
+      this.modelSelect.value, enriched, userPayload,
       0, "auto",
       (chunk) => { this.currentResult += chunk; this.outputContent.setText(this.currentResult); this.outputContent.scrollTop = this.outputContent.scrollHeight; },
       () => { this.killProcess = null; this.outputContent.removeClass("cw-streaming"); this.isVizMode = true; this.setState("done"); },
@@ -798,8 +814,8 @@ export class ClaudeWriterView extends ItemView {
 
     const userPayload = this.buildUserPayload(this.currentSelection);
 
-    const handle = callClaude(
-      this.plugin.getClaudePath(), this.modelSelect.value, enriched, userPayload,
+    const handle = this.callClaudeAuto(
+      this.modelSelect.value, enriched, userPayload,
       this.plugin.settings.maxChars, this.plugin.settings.tone,
       (chunk) => { this.currentResult += chunk; this.outputContent.setText(this.currentResult); this.outputContent.scrollTop = this.outputContent.scrollHeight; },
       () => { this.killProcess = null; this.outputContent.removeClass("cw-streaming"); this.setState("done"); },
@@ -848,8 +864,8 @@ export class ClaudeWriterView extends ItemView {
 
     const userPayload = this.buildUserPayload(this.currentSelection);
 
-    const handle = callClaude(
-      this.plugin.getClaudePath(), useModel, enriched, userPayload,
+    const handle = this.callClaudeAuto(
+      useModel, enriched, userPayload,
       this.plugin.settings.maxChars, useTone,
       (chunk) => { this.currentResult += chunk; this.outputContent.setText(this.currentResult); this.outputContent.scrollTop = this.outputContent.scrollHeight; },
       () => { this.killProcess = null; this.outputContent.removeClass("cw-streaming"); this.setState("done"); },

@@ -1,4 +1,4 @@
-import { Plugin, Editor, MarkdownView, Notice, PluginSettingTab, Setting, Menu } from "obsidian";
+import { Plugin, Editor, MarkdownView, Notice, PluginSettingTab, Setting, Menu, Platform, requestUrl } from "obsidian";
 import { ClaudeWriterView, VIEW_TYPE } from "./view";
 
 // ─── Template Prompts ────────────────────────────────
@@ -258,6 +258,7 @@ export interface ClaudeWriterSettings {
   maxChars: number;
   tone: string;
   customPrompts: Record<string, string>;
+  bridgeUrl: string;
 }
 
 export const DEFAULT_SETTINGS: ClaudeWriterSettings = {
@@ -266,6 +267,7 @@ export const DEFAULT_SETTINGS: ClaudeWriterSettings = {
   maxChars: 0,
   tone: "auto",
   customPrompts: {},
+  bridgeUrl: "http://127.0.0.1:3456",
 };
 
 export const TONES: { id: string; label: string; desc: string; instruction: string }[] = [
@@ -371,6 +373,57 @@ Cover: background, core principles, relationships between components, and real-w
   else { clearTimeout(timer); child.kill(); onError("stdin not available"); }
 
   return { kill: () => { clearTimeout(timer); child.kill(); } };
+}
+
+// ─── Mobile Bridge (Termux) ─────────────────────────
+
+export function callClaudeMobile(
+  bridgeUrl: string, model: string, systemPrompt: string, userText: string, maxChars: number, tone: string,
+  onChunk: (chunk: string) => void, onDone: () => void, onError: (err: string) => void,
+  replaceMode = true,
+): { kill: () => void } {
+  const REPLACE_ONLY = `You are a text replacement tool. Rules:
+1. Output ONLY the replacement for the [대체 대상] section.
+2. Consider [앞 문맥] and [뒤 문맥] for tone, flow, and coherence — but NEVER output them.
+3. The result must read naturally when placed between the surrounding context.
+4. No preamble, no explanation, no code block wrapping. Raw replacement text only.`;
+  const EXPLAIN_MODE = `You are an expert educator. Explain the [대체 대상] text so the reader fully understands it.
+Use [앞 문맥] and [뒤 문맥] to understand the domain — but NEVER output them.
+Cover: background, core principles, relationships between components, and real-world implications.`;
+  const modePrefix = replaceMode ? REPLACE_ONLY : EXPLAIN_MODE;
+  const toneInst = tone && tone !== "auto" ? `\n[톤: ${TONES.find(t => t.id === tone)?.instruction || ""}]` : "";
+  const charLimit = maxChars > 0 ? `\n답변은 ${maxChars}자 이내로 제한.` : "";
+  const fullPrompt = `${modePrefix}\n\n${systemPrompt}${toneInst}${charLimit}\n\n---\n\n${userText}`;
+
+  let aborted = false;
+
+  (async () => {
+    try {
+      const resp = await requestUrl({
+        url: `${bridgeUrl}/ask`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: fullPrompt, model, timeout: model === "opus" ? 180000 : model === "sonnet" ? 120000 : 60000 }),
+      });
+      if (aborted) return;
+      const data = resp.json;
+      if (data.error) {
+        onError(data.error);
+      } else {
+        onChunk(data.response || "");
+        onDone();
+      }
+    } catch (err: any) {
+      if (!aborted) onError(`Bridge 연결 실패: ${err.message}\nTermux에서 bridge.mjs가 실행 중인지 확인하세요.`);
+    }
+  })();
+
+  return { kill: () => { aborted = true; } };
+}
+
+/** Check if running on mobile */
+export function isMobile(): boolean {
+  return Platform.isMobile;
 }
 
 // ─── Template Detection ──────────────────────────────
@@ -514,6 +567,10 @@ class ClaudeWriterSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("글자수 제한").setDesc("0 = 무제한")
       .addText((t) => t.setValue(String(this.plugin.settings.maxChars))
         .onChange(async (v) => { this.plugin.settings.maxChars = parseInt(v) || 0; await this.plugin.saveSettings(); }));
+
+    new Setting(containerEl).setName("모바일 Bridge URL").setDesc("Termux bridge.mjs 주소 (모바일 전용)")
+      .addText((t) => t.setPlaceholder("http://127.0.0.1:3456").setValue(this.plugin.settings.bridgeUrl)
+        .onChange(async (v) => { this.plugin.settings.bridgeUrl = v; await this.plugin.saveSettings(); }));
 
     containerEl.createEl("h3", { text: "템플릿별 프롬프트 (자동 감지)" });
     containerEl.createEl("p", { text: "frontmatter의 template 필드를 기반으로 자동 적용됩니다.", cls: "setting-item-description" });
