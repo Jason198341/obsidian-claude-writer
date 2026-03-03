@@ -89,6 +89,8 @@ export const COMMANDS: CmdDef[] = [
     prompt: "" },
   { id: "answer-questions", name: "독서노트 AI 답변 (Answer Questions)", label: "AI 답변", icon: "❓", desc: "미답변 질문 자동 답변",
     prompt: "" },
+  { id: "vault-ops", name: "볼트 대수술 (Vault Ops)", label: "볼트 Ops", icon: "🏗️", desc: "PARA→GTD+PARA 자동 마이그레이션",
+    prompt: "" },
 ];
 
 // ─── Explain Levels ──────────────────────────────────
@@ -458,7 +460,17 @@ export default class ClaudeWriterPlugin extends Plugin {
 
     // Register editor commands
     for (const cmd of COMMANDS) {
-      if (cmd.id === "answer-questions") {
+      if (cmd.id === "vault-ops") {
+        // vault-ops doesn't need editor selection
+        this.addCommand({
+          id: cmd.id, name: cmd.name,
+          callback: async () => {
+            await this.activateView();
+            const view = this.getView();
+            if (view) view.triggerVaultOps();
+          },
+        });
+      } else if (cmd.id === "answer-questions") {
         // answer-questions operates on the whole document, not a selection
         this.addCommand({
           id: cmd.id, name: cmd.name,

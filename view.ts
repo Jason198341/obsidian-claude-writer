@@ -2,6 +2,7 @@ import { ItemView, WorkspaceLeaf, MarkdownView, Notice } from "obsidian";
 import type ClaudeWriterPlugin from "./main";
 import { callClaude, callClaudeMobile, isMobile, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions } from "./main";
 import type { CmdDef } from "./main";
+import { scanVaultStructure, simulateMigration, runFullMigration, type MigrationPhase } from "./vault-ops";
 
 export const VIEW_TYPE = "claude-writer-view";
 type ViewState = "idle" | "processing" | "done" | "error";
@@ -109,7 +110,8 @@ export class ClaudeWriterView extends ItemView {
   triggerCommand(cmdId: string, selection: string) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
 
-    // answer-questions is handled separately — uses full document
+    // vault-ops and answer-questions handled separately
+    if (cmdId === "vault-ops") { this.triggerVaultOps(); return; }
     if (cmdId === "answer-questions") {
       const editor = this.findMarkdownEditor();
       if (editor) this.triggerAnswerQuestions(editor);
@@ -180,6 +182,110 @@ export class ClaudeWriterView extends ItemView {
       }
     }
     return null;
+  }
+
+  // ─── Vault Ops (PARA → GTD+PARA Migration) ─────
+
+  triggerVaultOps() {
+    if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
+
+    this.activeCommand = "vault-ops";
+    this.outputContent.empty();
+    this.inputSection.addClass("cw-hidden");
+    this.explainRow.addClass("cw-hidden");
+    this.vizRow.addClass("cw-hidden");
+    this.customRow.addClass("cw-hidden");
+    this.outputSection.removeClass("cw-hidden");
+
+    // Scan current state
+    const scan = scanVaultStructure(this.app);
+
+    const container = this.outputContent;
+    container.createEl("h4", { text: "🏗️ Vault Ops — PARA → GTD+PARA" });
+
+    // Status summary
+    const statusDiv = container.createDiv({ cls: "cw-vault-status" });
+    statusDiv.createEl("p", { text: `총 파일: ${scan.totalFiles}개` });
+    statusDiv.createEl("p", { text: `PARA 폴더: ${scan.paraFolders.join(", ") || "없음"}` });
+    statusDiv.createEl("p", { text: `GTD 폴더: ${scan.gtdFolders.join(", ") || "없음"}` });
+    statusDiv.createEl("p", { text: `이동 대상: ${scan.filesToMigrate}개` });
+
+    if (scan.hasGtd && !scan.hasPara) {
+      statusDiv.createEl("p", { text: "✅ 이미 GTD+PARA 구조입니다!", cls: "cw-vault-done" });
+      return;
+    }
+
+    // Simulate button
+    const btnRow = container.createDiv({ cls: "cw-vault-btns" });
+
+    const simBtn = btnRow.createEl("button", { text: "📋 시뮬레이션", cls: "cw-btn" });
+    simBtn.addEventListener("click", () => {
+      const sim = simulateMigration(this.app);
+      const simDiv = container.createDiv({ cls: "cw-vault-sim" });
+      simDiv.createEl("pre", { text: sim.summary });
+
+      // Show file move preview (first 20)
+      if (sim.filesToMove.length > 0) {
+        const previewDiv = simDiv.createDiv();
+        previewDiv.createEl("h5", { text: `파일 이동 미리보기 (${Math.min(20, sim.filesToMove.length)}/${sim.filesToMove.length})` });
+        const list = previewDiv.createEl("ul");
+        for (const move of sim.filesToMove.slice(0, 20)) {
+          list.createEl("li", { text: `${move.from} → ${move.to}` });
+        }
+        if (sim.filesToMove.length > 20) {
+          previewDiv.createEl("p", { text: `... 외 ${sim.filesToMove.length - 20}개`, cls: "cw-vault-more" });
+        }
+      }
+    });
+
+    // Execute button
+    const execBtn = btnRow.createEl("button", { text: "🚀 대수술 실행", cls: "cw-btn cw-btn-primary" });
+    execBtn.addEventListener("click", async () => {
+      execBtn.disabled = true;
+      simBtn.disabled = true;
+
+      const progressDiv = container.createDiv({ cls: "cw-vault-progress" });
+      const phaseEl = progressDiv.createEl("p", { text: "시작...", cls: "cw-vault-phase" });
+      const barContainer = progressDiv.createDiv({ cls: "cw-vault-bar-container" });
+      const bar = barContainer.createDiv({ cls: "cw-vault-bar" });
+      const fileEl = progressDiv.createEl("p", { text: "", cls: "cw-vault-file" });
+      const logEl = progressDiv.createEl("div", { cls: "cw-vault-log" });
+
+      this.setState("processing");
+
+      const result = await runFullMigration(
+        this.app,
+        (phase: MigrationPhase, msg: string) => {
+          phaseEl.setText(`[${phase}] ${msg}`);
+          logEl.createEl("p", { text: msg });
+          // Auto-scroll
+          logEl.scrollTop = logEl.scrollHeight;
+        },
+        (current: number, total: number, file: string) => {
+          const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+          bar.style.width = `${pct}%`;
+          fileEl.setText(`${current}/${total}: ${file.split("/").pop()}`);
+        },
+        (errMsg: string) => {
+          logEl.createEl("p", { text: `❌ ${errMsg}`, cls: "cw-vault-error" });
+        },
+      );
+
+      bar.style.width = "100%";
+      this.setState("done");
+
+      // Summary
+      const summaryDiv = container.createDiv({ cls: "cw-vault-summary" });
+      summaryDiv.createEl("h4", { text: "✅ 마이그레이션 완료" });
+      summaryDiv.createEl("p", { text: `폴더 생성: ${result.foldersCreated}개` });
+      summaryDiv.createEl("p", { text: `파일 이동: ${result.filesMoved}개` });
+      summaryDiv.createEl("p", { text: `링크 수정: ${result.linksUpdated}개` });
+      if (result.errors.length > 0) {
+        summaryDiv.createEl("p", { text: `오류: ${result.errors.length}건`, cls: "cw-vault-error" });
+      }
+
+      new Notice(`Vault Ops 완료! ${result.filesMoved}개 파일 이동, ${result.linksUpdated}개 링크 수정`);
+    });
   }
 
   // ─── Answer Questions (EPUB++ integration) ──────

@@ -261,6 +261,29 @@ details[open] > .cw-account-summary::after { content: "▴"; }
 }
 .cw-btn-accumulate:hover { opacity: 0.9; }
 
+/* ─── Vault Ops ─────────────────────────────── */
+.cw-vault-status { padding: 8px; background: var(--background-secondary); border-radius: 6px; margin: 8px 0; font-size: 12px; }
+.cw-vault-status p { margin: 2px 0; }
+.cw-vault-done { color: var(--text-success); font-weight: 600; }
+.cw-vault-btns { display: flex; gap: 8px; margin: 8px 0; }
+.cw-vault-btns button { flex: 1; }
+.cw-vault-sim { margin: 8px 0; }
+.cw-vault-sim pre { font-size: 11px; background: var(--background-secondary); padding: 8px; border-radius: 4px; white-space: pre-wrap; }
+.cw-vault-sim ul { font-size: 11px; max-height: 200px; overflow-y: auto; padding-left: 16px; }
+.cw-vault-sim li { margin: 2px 0; color: var(--text-muted); }
+.cw-vault-more { color: var(--text-muted); font-size: 11px; font-style: italic; }
+.cw-vault-progress { margin: 8px 0; }
+.cw-vault-phase { font-weight: 600; font-size: 12px; margin: 4px 0; }
+.cw-vault-bar-container { height: 6px; background: var(--background-modifier-border); border-radius: 3px; overflow: hidden; }
+.cw-vault-bar { height: 100%; width: 0; background: var(--interactive-accent); border-radius: 3px; transition: width 0.3s ease; }
+.cw-vault-file { font-size: 11px; color: var(--text-muted); margin: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cw-vault-log { max-height: 150px; overflow-y: auto; font-size: 11px; margin: 4px 0; }
+.cw-vault-log p { margin: 1px 0; }
+.cw-vault-error { color: var(--text-error); }
+.cw-vault-summary { padding: 8px; background: var(--background-secondary); border-radius: 6px; margin: 8px 0; }
+.cw-vault-summary h4 { margin: 0 0 4px 0; }
+.cw-vault-summary p { margin: 2px 0; font-size: 12px; }
+
 /* ─── Utility ────────────────────────────────── */
 .cw-hidden { display: none !important; }
 
