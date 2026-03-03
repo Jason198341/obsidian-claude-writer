@@ -284,6 +284,47 @@ details[open] > .cw-account-summary::after { content: "▴"; }
 .cw-vault-summary h4 { margin: 0 0 4px 0; }
 .cw-vault-summary p { margin: 2px 0; font-size: 12px; }
 
+/* ─── Command Console ───────────────────────── */
+.cw-console-section { display: flex; flex-direction: column; gap: 6px; }
+.cw-console-input {
+  width: 100%; min-height: 80px; padding: 10px; border-radius: 6px; font-size: 12px;
+  border: 2px solid var(--interactive-accent); background: var(--background-primary);
+  color: var(--text-normal); resize: vertical; font-family: inherit;
+}
+.cw-console-input:focus { border-color: var(--text-accent); outline: none; box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.2); }
+.cw-console-input::placeholder { color: var(--text-faint); font-size: 11px; }
+.cw-console-actions { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.cw-console-save-row { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+.cw-console-save-name {
+  width: 100px; padding: 3px 6px; border-radius: 4px; font-size: 11px;
+  border: 1px solid var(--background-modifier-border); background: var(--background-primary);
+  color: var(--text-normal);
+}
+.cw-console-save-name:focus { border-color: var(--text-accent); outline: none; }
+.cw-console-saved-label { margin-top: 6px; }
+.cw-console-saved-list { display: flex; flex-direction: column; gap: 2px; max-height: 150px; overflow-y: auto; }
+.cw-console-saved-item {
+  display: flex; align-items: center; gap: 4px; padding: 4px 6px;
+  border-radius: 4px; background: var(--background-secondary);
+  transition: background 0.15s;
+}
+.cw-console-saved-item:hover { background: var(--background-secondary-alt); }
+.cw-console-saved-name {
+  flex: 1; text-align: left; background: none; border: none; cursor: pointer;
+  font-size: 11px; font-weight: 600; color: var(--text-normal); padding: 2px 4px;
+}
+.cw-console-saved-name:hover { color: var(--interactive-accent); }
+.cw-console-saved-del {
+  background: none; border: none; cursor: pointer; color: var(--text-muted);
+  font-size: 14px; padding: 0 4px; line-height: 1;
+}
+.cw-console-saved-del:hover { color: var(--text-error); }
+.cw-console-empty { font-size: 10px; color: var(--text-faint); font-style: italic; margin: 2px 0; }
+.cw-cmd-console {
+  border: 2px dashed var(--interactive-accent) !important;
+  background: var(--background-primary-alt) !important;
+}
+
 /* ─── Utility ────────────────────────────────── */
 .cw-hidden { display: none !important; }
 

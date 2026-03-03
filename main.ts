@@ -91,6 +91,8 @@ export const COMMANDS: CmdDef[] = [
     prompt: "" },
   { id: "vault-ops", name: "볼트 대수술 (Vault Ops)", label: "볼트 Ops", icon: "🏗️", desc: "PARA→GTD+PARA 자동 마이그레이션",
     prompt: "" },
+  { id: "console", name: "커맨드 콘솔 (Command Console)", label: "콘솔", icon: "⌨️", desc: "자유 명령 입력 + 문서 생성/작업",
+    prompt: "" },
 ];
 
 // ─── Explain Levels ──────────────────────────────────
@@ -254,6 +256,11 @@ export function parseQuestions(content: string): { questions: ParsedQuestion[]; 
 
 // ─── Settings ────────────────────────────────────────
 
+export interface SavedCommand {
+  name: string;
+  command: string;
+}
+
 export interface ClaudeWriterSettings {
   claudePath: string;
   model: string;
@@ -261,6 +268,7 @@ export interface ClaudeWriterSettings {
   tone: string;
   customPrompts: Record<string, string>;
   bridgeUrl: string;
+  savedCommands: SavedCommand[];
 }
 
 export const DEFAULT_SETTINGS: ClaudeWriterSettings = {
@@ -270,6 +278,7 @@ export const DEFAULT_SETTINGS: ClaudeWriterSettings = {
   tone: "auto",
   customPrompts: {},
   bridgeUrl: "http://127.0.0.1:3456",
+  savedCommands: [],
 };
 
 export const TONES: { id: string; label: string; desc: string; instruction: string }[] = [
@@ -461,13 +470,21 @@ export default class ClaudeWriterPlugin extends Plugin {
     // Register editor commands
     for (const cmd of COMMANDS) {
       if (cmd.id === "vault-ops") {
-        // vault-ops doesn't need editor selection
         this.addCommand({
           id: cmd.id, name: cmd.name,
           callback: async () => {
             await this.activateView();
             const view = this.getView();
             if (view) view.triggerVaultOps();
+          },
+        });
+      } else if (cmd.id === "console") {
+        this.addCommand({
+          id: cmd.id, name: cmd.name,
+          callback: async () => {
+            await this.activateView();
+            const view = this.getView();
+            if (view) view.triggerConsole();
           },
         });
       } else if (cmd.id === "answer-questions") {

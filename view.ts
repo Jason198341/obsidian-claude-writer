@@ -1,6 +1,6 @@
 import { ItemView, WorkspaceLeaf, MarkdownView, Notice } from "obsidian";
 import type ClaudeWriterPlugin from "./main";
-import { callClaude, callClaudeMobile, isMobile, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions } from "./main";
+import { callClaude, callClaudeMobile, isMobile, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions, type SavedCommand } from "./main";
 import type { CmdDef } from "./main";
 import { scanVaultStructure, simulateMigration, runFullMigration, type MigrationPhase } from "./vault-ops";
 
@@ -69,6 +69,12 @@ export class ClaudeWriterView extends ItemView {
   private currentTemplate = "";
   private scanAbortPath = "";
 
+  // Console DOM
+  private consoleSection: HTMLElement;
+  private consoleInput: HTMLTextAreaElement;
+  private consoleSavedList: HTMLElement;
+  private consoleSaveNameInput: HTMLInputElement;
+
   constructor(leaf: WorkspaceLeaf, plugin: ClaudeWriterPlugin) {
     super(leaf);
     this.plugin = plugin;
@@ -110,8 +116,9 @@ export class ClaudeWriterView extends ItemView {
   triggerCommand(cmdId: string, selection: string) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
 
-    // vault-ops and answer-questions handled separately
+    // vault-ops, console, answer-questions handled separately
     if (cmdId === "vault-ops") { this.triggerVaultOps(); return; }
+    if (cmdId === "console") { this.triggerConsole(); return; }
     if (cmdId === "answer-questions") {
       const editor = this.findMarkdownEditor();
       if (editor) this.triggerAnswerQuestions(editor);
@@ -195,6 +202,7 @@ export class ClaudeWriterView extends ItemView {
     this.explainRow.addClass("cw-hidden");
     this.vizRow.addClass("cw-hidden");
     this.customRow.addClass("cw-hidden");
+    this.consoleSection.addClass("cw-hidden");
     this.outputSection.removeClass("cw-hidden");
 
     // Scan current state
@@ -286,6 +294,119 @@ export class ClaudeWriterView extends ItemView {
 
       new Notice(`Vault Ops 완료! ${result.filesMoved}개 파일 이동, ${result.linksUpdated}개 링크 수정`);
     });
+  }
+
+  // ─── Command Console ─────────────────────────────
+
+  triggerConsole() {
+    if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
+
+    this.activeCommand = "console";
+    this.inputSection.addClass("cw-hidden");
+    this.explainRow.addClass("cw-hidden");
+    this.vizRow.addClass("cw-hidden");
+    this.customRow.addClass("cw-hidden");
+    this.outputSection.addClass("cw-hidden");
+    this.consoleSection.removeClass("cw-hidden");
+    this.consoleInput.focus();
+    this.refreshSavedCommands();
+  }
+
+  private executeConsoleCommand(command: string) {
+    if (!command.trim()) { new Notice("명령을 입력해주세요"); return; }
+
+    this.consoleSection.addClass("cw-hidden");
+    this.outputContent.empty();
+    this.outputContent.addClass("cw-streaming");
+    this.outputSection.removeClass("cw-hidden");
+    this.setState("processing");
+
+    this.currentResult = "";
+    this.activeCommand = "console";
+
+    // Build vault-aware system prompt
+    const vaultRoot = (this.app.vault as any).adapter?.basePath || "";
+    const activeFile = this.app.workspace.getActiveFile();
+    const activeFilePath = activeFile ? activeFile.path : "(없음)";
+    const context = this.contextCache.get(this.currentDocPath) || "";
+
+    const systemPrompt = `당신은 Obsidian 볼트 작업 전문가입니다. 사용자의 명령을 수행하세요.
+
+현재 볼트 정보:
+- 볼트 경로: ${vaultRoot}
+- 열린 파일: ${activeFilePath}
+- 구조: GTD+PARA (00_Dashboard ~ 07_Resources)
+
+규칙:
+1. 문서 생성 요청 시: 완성된 마크다운 문서를 출력하세요. frontmatter 포함.
+2. 분석/검색 요청 시: 결과를 구조화된 마크다운으로 출력하세요.
+3. 수정 요청 시: 수정된 전체 내용을 출력하세요.
+4. 항상 한국어. 설명 없이 결과만.
+${context ? `\n[참고 맥락]\n${context}` : ""}`;
+
+    // If there's a selection, include it
+    const selection = this.getEditorSelection(true);
+    let userText = command;
+    if (selection) {
+      userText = `[명령]\n${command}\n\n[선택된 텍스트]\n${selection}`;
+    }
+
+    const handle = this.callClaudeAuto(
+      this.modelSelect.value, systemPrompt, userText,
+      0, this.plugin.settings.tone,
+      (chunk) => { this.currentResult += chunk; this.outputContent.setText(this.currentResult); this.outputContent.scrollTop = this.outputContent.scrollHeight; },
+      () => {
+        this.killProcess = null;
+        this.outputContent.removeClass("cw-streaming");
+        this.setState("done");
+      },
+      (err) => { this.killProcess = null; this.outputContent.removeClass("cw-streaming"); this.setState("error"); this.outputContent.setText(`오류: ${err}`); },
+      false,
+    );
+    this.killProcess = handle.kill;
+  }
+
+  private async saveConsoleCommand(name: string, command: string) {
+    if (!name.trim() || !command.trim()) { new Notice("이름과 명령을 모두 입력해주세요"); return; }
+    const saved = this.plugin.settings.savedCommands;
+    const existing = saved.findIndex(s => s.name === name);
+    if (existing >= 0) {
+      saved[existing].command = command;
+    } else {
+      saved.push({ name, command });
+    }
+    await this.plugin.saveSettings();
+    new Notice(`커맨드 저장: ${name}`);
+    this.refreshSavedCommands();
+  }
+
+  private async deleteConsoleCommand(name: string) {
+    this.plugin.settings.savedCommands = this.plugin.settings.savedCommands.filter(s => s.name !== name);
+    await this.plugin.saveSettings();
+    this.refreshSavedCommands();
+  }
+
+  private refreshSavedCommands() {
+    this.consoleSavedList.empty();
+    const saved = this.plugin.settings.savedCommands;
+    if (saved.length === 0) {
+      this.consoleSavedList.createEl("p", { text: "저장된 커맨드 없음", cls: "cw-console-empty" });
+      return;
+    }
+    for (const cmd of saved) {
+      const item = this.consoleSavedList.createDiv({ cls: "cw-console-saved-item" });
+      const nameBtn = item.createEl("button", { text: cmd.name, cls: "cw-console-saved-name" });
+      nameBtn.title = cmd.command;
+      nameBtn.addEventListener("click", () => {
+        this.consoleInput.value = cmd.command;
+        this.consoleInput.focus();
+      });
+      const delBtn = item.createEl("button", { text: "×", cls: "cw-console-saved-del" });
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.deleteConsoleCommand(cmd.name);
+      });
+    }
   }
 
   // ─── Answer Questions (EPUB++ integration) ──────
@@ -443,7 +564,7 @@ export class ClaudeWriterView extends ItemView {
 
     // ── Command grid (PRIMARY) ──
     this.cmdGrid = c.createDiv("cw-cmd-grid");
-    const SPECIAL_IDS = new Set(["custom", "explain", "visualize", "answer-questions"]);
+    const SPECIAL_IDS = new Set(["custom", "explain", "visualize", "answer-questions", "console"]);
     const topCmds = COMMANDS.filter(cmd => !SPECIAL_IDS.has(cmd.id));
     for (const cmd of topCmds) {
       const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn", attr: { role: "button", tabindex: "0", title: cmd.desc } });
@@ -470,6 +591,15 @@ export class ClaudeWriterView extends ItemView {
       btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
       btn.addEventListener("click", () => this.onCommandClick("answer-questions"));
       this.actionBtns.set("answer-questions", btn);
+    }
+    // Console (full width, always active — no selection needed)
+    {
+      const cmd = COMMANDS.find(c => c.id === "console")!;
+      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-full cw-cmd-no-sel cw-cmd-console", attr: { role: "button", tabindex: "0", title: cmd.desc } });
+      btn.createEl("span", { text: cmd.icon, cls: "cw-cmd-icon" });
+      btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
+      btn.addEventListener("click", () => this.onCommandClick("console"));
+      this.actionBtns.set("console", btn);
     }
 
     this.selectionHint = c.createDiv("cw-selection-hint");
@@ -503,6 +633,25 @@ export class ClaudeWriterView extends ItemView {
     customActions.createEl("button", { text: "실행", cls: "cw-btn cw-btn-primary" }).addEventListener("click", () => this.onCustomRun());
     customActions.createEl("button", { text: "취소", cls: "cw-btn" }).addEventListener("click", () => this.customRow.addClass("cw-hidden"));
     this.customInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.onCustomRun(); } });
+
+    // ── Command Console ──
+    this.consoleSection = c.createDiv("cw-console-section cw-hidden");
+    this.consoleSection.createEl("div", { text: "⌨️ 커맨드 콘솔", cls: "cw-section-label" });
+    this.consoleInput = this.consoleSection.createEl("textarea", { cls: "cw-console-input", attr: { placeholder: "명령을 입력하세요...\n예: '회의록 새로 만들어줘' / '이 문서 요약해서 새 노트로' / '프로젝트 현황 정리'\nCtrl+Enter로 실행", rows: "4" } });
+    const consoleActions = this.consoleSection.createDiv("cw-console-actions");
+    consoleActions.createEl("button", { text: "▶ 실행", cls: "cw-btn cw-btn-primary" }).addEventListener("click", () => this.executeConsoleCommand(this.consoleInput.value));
+    // Save row
+    const saveRow = consoleActions.createDiv("cw-console-save-row");
+    this.consoleSaveNameInput = saveRow.createEl("input", { cls: "cw-console-save-name", attr: { placeholder: "커맨드 이름", type: "text" } });
+    saveRow.createEl("button", { text: "💾 저장", cls: "cw-btn cw-btn-xs" }).addEventListener("click", () => {
+      this.saveConsoleCommand(this.consoleSaveNameInput.value, this.consoleInput.value);
+      this.consoleSaveNameInput.value = "";
+    });
+    consoleActions.createEl("button", { text: "닫기", cls: "cw-btn" }).addEventListener("click", () => { this.consoleSection.addClass("cw-hidden"); this.setState("idle"); });
+    this.consoleInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.executeConsoleCommand(this.consoleInput.value); } });
+    // Saved commands list
+    this.consoleSection.createEl("div", { text: "저장된 커맨드", cls: "cw-section-label cw-console-saved-label" });
+    this.consoleSavedList = this.consoleSection.createDiv("cw-console-saved-list");
 
     // ── Original (compact summary) ──
     this.inputSection = c.createDiv("cw-section cw-hidden");
@@ -746,6 +895,9 @@ export class ClaudeWriterView extends ItemView {
 
   private onCommandClick(cmdId: string) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
+
+    // console doesn't need a selection
+    if (cmdId === "console") { this.triggerConsole(); return; }
 
     // answer-questions doesn't need a selection — uses full document
     if (cmdId === "answer-questions") {
@@ -1114,6 +1266,7 @@ export class ClaudeWriterView extends ItemView {
         b.setText("대기"); b.addClass("cw-badge-idle");
         this.inputSection.addClass("cw-hidden");
         this.outputSection.addClass("cw-hidden");
+        this.consoleSection.addClass("cw-hidden");
         this.actionBtns.forEach(btn => btn.removeClass("cw-cmd-active"));
         break;
       case "processing":
