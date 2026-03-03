@@ -69,9 +69,10 @@
 
 /* ─── Command Grid (PRIMARY UI) ──────────────── */
 .cw-cmd-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px;
   transition: opacity 0.2s;
 }
+.cw-more-tools .cw-cmd-grid { grid-template-columns: repeat(4, 1fr); }
 .cw-cmd-full { grid-column: 1 / -1; }
 .cw-no-selection { opacity: 0.4; pointer-events: none; }
 .cw-no-selection .cw-cmd-no-sel { opacity: 1; pointer-events: auto; }
@@ -333,9 +334,23 @@ details[open] > .cw-account-summary::after { content: "▴"; }
 .cw-console-saved-del:hover { color: var(--text-error); }
 .cw-console-empty { font-size: 10px; color: var(--text-faint); font-style: italic; margin: 2px 0; }
 .cw-cmd-console {
-  border: 2px dashed var(--interactive-accent) !important;
-  background: var(--background-primary-alt) !important;
+  border: 2px solid var(--interactive-accent) !important;
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
 }
+.cw-cmd-console .cw-cmd-label { color: var(--text-on-accent) !important; font-size: 12px !important; }
+.cw-cmd-console .cw-cmd-icon { font-size: 20px; }
+
+/* ─── Collapsible Text Tools ────────────────── */
+.cw-more-tools { margin-top: 4px; }
+.cw-more-summary {
+  cursor: pointer; font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-faint); padding: 4px 0;
+  list-style: none; user-select: none;
+}
+.cw-more-summary::-webkit-details-marker { display: none; }
+.cw-more-tools[open] > .cw-more-summary { color: var(--text-muted); }
+.cw-more-tools .cw-cmd-grid { margin-top: 4px; }
 
 /* ─── Utility ────────────────────────────────── */
 .cw-hidden { display: none !important; }

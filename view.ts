@@ -693,47 +693,52 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       .addEventListener("click", () => this.contextBanner.addClass("cw-hidden"));
     this.contextInfo = c.createDiv("cw-context-info cw-hidden");
 
-    // ── Command grid (PRIMARY) ──
+    // ── Primary one-touch buttons ──
     this.cmdGrid = c.createDiv("cw-cmd-grid");
-    const SPECIAL_IDS = new Set(["custom", "explain", "visualize", "answer-questions", "console"]);
-    const topCmds = COMMANDS.filter(cmd => !SPECIAL_IDS.has(cmd.id));
-    for (const cmd of topCmds) {
-      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn", attr: { role: "button", tabindex: "0", title: cmd.desc } });
+
+    // Console — primary, always visible, prominent
+    {
+      const cmd = COMMANDS.find(c => c.id === "console")!;
+      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-full cw-cmd-no-sel cw-cmd-console", attr: { role: "button", tabindex: "0", title: cmd.desc } });
+      btn.createEl("span", { text: cmd.icon, cls: "cw-cmd-icon" });
+      btn.createEl("span", { text: "커맨드 콘솔", cls: "cw-cmd-label" });
+      btn.addEventListener("click", () => this.onCommandClick("console"));
+      this.actionBtns.set("console", btn);
+    }
+    // Vault Ops + AI 답변 (half-width each)
+    {
+      const cmd = COMMANDS.find(c => c.id === "vault-ops")!;
+      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-no-sel", attr: { role: "button", tabindex: "0", title: cmd.desc } });
       btn.createEl("span", { text: cmd.icon, cls: "cw-cmd-icon" });
       btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
-      btn.addEventListener("click", () => this.onCommandClick(cmd.id));
-      btn.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.onCommandClick(cmd.id); } });
-      this.actionBtns.set(cmd.id, btn);
+      btn.addEventListener("click", () => this.onCommandClick("vault-ops"));
+      this.actionBtns.set("vault-ops", btn);
     }
-    // Explain + Visualize + Custom (full width, need selection)
-    for (const id of ["explain", "visualize", "custom"]) {
-      const cmd = COMMANDS.find(c => c.id === id)!;
-      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-full", attr: { role: "button", tabindex: "0", title: cmd.desc } });
-      btn.createEl("span", { text: cmd.icon, cls: "cw-cmd-icon" });
-      btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
-      btn.addEventListener("click", () => this.onCommandClick(id));
-      this.actionBtns.set(id, btn);
-    }
-    // Answer Questions (full width, always active — no selection needed)
     {
       const cmd = COMMANDS.find(c => c.id === "answer-questions")!;
-      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-full cw-cmd-no-sel", attr: { role: "button", tabindex: "0", title: cmd.desc } });
+      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-no-sel", attr: { role: "button", tabindex: "0", title: cmd.desc } });
       btn.createEl("span", { text: cmd.icon, cls: "cw-cmd-icon" });
       btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
       btn.addEventListener("click", () => this.onCommandClick("answer-questions"));
       this.actionBtns.set("answer-questions", btn);
     }
-    // Console (full width, always active — no selection needed)
-    {
-      const cmd = COMMANDS.find(c => c.id === "console")!;
-      const btn = this.cmdGrid.createDiv({ cls: "cw-cmd-btn cw-cmd-full cw-cmd-no-sel cw-cmd-console", attr: { role: "button", tabindex: "0", title: cmd.desc } });
+
+    // ── Collapsible text tools (selection-based) ──
+    const moreDetails = c.createEl("details", { cls: "cw-more-tools" });
+    const moreSummary = moreDetails.createEl("summary", { cls: "cw-more-summary" });
+    moreSummary.setText("텍스트 도구 ▾");
+    const moreGrid = moreDetails.createDiv("cw-cmd-grid");
+    const HIDDEN_IDS = new Set(["vault-ops", "answer-questions", "console"]);
+    const textCmds = COMMANDS.filter(cmd => !HIDDEN_IDS.has(cmd.id));
+    for (const cmd of textCmds) {
+      const btn = moreGrid.createDiv({ cls: "cw-cmd-btn", attr: { role: "button", tabindex: "0", title: cmd.desc } });
       btn.createEl("span", { text: cmd.icon, cls: "cw-cmd-icon" });
       btn.createEl("span", { text: cmd.label, cls: "cw-cmd-label" });
-      btn.addEventListener("click", () => this.onCommandClick("console"));
-      this.actionBtns.set("console", btn);
+      btn.addEventListener("click", () => this.onCommandClick(cmd.id));
+      this.actionBtns.set(cmd.id, btn);
     }
 
-    this.selectionHint = c.createDiv("cw-selection-hint");
+    this.selectionHint = c.createDiv("cw-selection-hint cw-hidden");
     this.selectionHint.setText("텍스트를 선택하면 명령을 사용할 수 있습니다");
 
     // ── Explain level picker ──
