@@ -74,6 +74,8 @@ export class ClaudeWriterView extends ItemView {
   private consoleInput: HTMLTextAreaElement;
   private consoleSavedList: HTMLElement;
   private consoleSaveNameInput: HTMLInputElement;
+  private consoleContextStatus: HTMLElement;
+  private consoleSelPreview: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: ClaudeWriterPlugin) {
     super(leaf);
@@ -310,9 +312,102 @@ export class ClaudeWriterView extends ItemView {
     this.consoleSection.removeClass("cw-hidden");
     this.consoleInput.focus();
     this.refreshSavedCommands();
+
+    // ── Selection preview ──
+    const selection = this.getEditorSelection(true);
+    if (selection) {
+      this.currentSelection = selection;
+      // Save cursor positions
+      if (this.lastEditor) {
+        this.savedFrom = this.lastEditor.editor.getCursor("from");
+        this.savedTo = this.lastEditor.editor.getCursor("to");
+      }
+      const preview = selection.length > 120 ? selection.slice(0, 120) + "..." : selection;
+      this.consoleSelPreview.setText(`📌 선택됨: "${preview}"`);
+      this.consoleSelPreview.removeClass("cw-hidden");
+    } else {
+      this.currentSelection = "";
+      this.consoleSelPreview.addClass("cw-hidden");
+    }
+
+    // ── Context status ──
+    this.updateConsoleContextStatus();
   }
 
-  private executeConsoleCommand(command: string) {
+  private async updateConsoleContextStatus() {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      this.consoleContextStatus.setText("📄 열린 문서 없음 — 독립 모드");
+      this.consoleContextStatus.className = "cw-console-ctx cw-console-ctx-none";
+      return;
+    }
+
+    const cached = this.contextCache.get(file.path);
+    if (cached) {
+      const linkCount = (cached.match(/\[\d단계:/g) || []).length;
+      this.consoleContextStatus.setText(`✅ ${file.basename} + 연결 ${linkCount}개 문서 맥락 로드됨`);
+      this.consoleContextStatus.className = "cw-console-ctx cw-console-ctx-ready";
+      return;
+    }
+
+    // Auto-scan context if not cached
+    this.consoleContextStatus.setText(`🔍 ${file.basename} 맥락 자동 파악 중...`);
+    this.consoleContextStatus.className = "cw-console-ctx cw-console-ctx-scanning";
+
+    try {
+      await this.scanContextSilent(file);
+      const newCached = this.contextCache.get(file.path);
+      if (newCached) {
+        const linkCount = (newCached.match(/\[\d단계:/g) || []).length;
+        this.consoleContextStatus.setText(`✅ ${file.basename} + 연결 ${linkCount}개 문서 맥락 로드됨`);
+        this.consoleContextStatus.className = "cw-console-ctx cw-console-ctx-ready";
+      }
+    } catch {
+      this.consoleContextStatus.setText(`📄 ${file.basename} — 맥락 파악 실패 (문서 내용만 사용)`);
+      this.consoleContextStatus.className = "cw-console-ctx cw-console-ctx-none";
+    }
+  }
+
+  /** Silent context scan — same as scanContext but without UI banners */
+  private async scanContextSilent(file: any): Promise<void> {
+    const content = await this.app.vault.cachedRead(file);
+    const useful = extractUsefulContent(content);
+    const links1 = this.extractLinks(content);
+    const depth1: { path: string; content: string }[] = [];
+
+    const depth1Results = await Promise.all(links1.map(async (l: string) => {
+      const f = this.app.metadataCache.getFirstLinkpathDest(l, file.path);
+      if (!f) return null;
+      const c = await this.app.vault.cachedRead(f);
+      return { path: f.path, content: extractUsefulContent(c) };
+    }));
+    for (const r of depth1Results) { if (r) depth1.push(r); }
+
+    const seen = new Set<string>([file.basename, ...links1]);
+    const depth2Links: string[] = [];
+    for (const doc of depth1) {
+      for (const l of this.extractLinks(doc.content)) {
+        if (!seen.has(l)) { seen.add(l); depth2Links.push(l); }
+      }
+    }
+    const depth2: { path: string; content: string }[] = [];
+    const d2Batch = await Promise.all(depth2Links.slice(0, 10).map(async (l: string) => {
+      const f = this.app.metadataCache.getFirstLinkpathDest(l, file.path);
+      if (!f) return null;
+      const c = await this.app.vault.cachedRead(f);
+      return { path: f.path, content: extractUsefulContent(c) };
+    }));
+    for (const r of d2Batch) { if (r) depth2.push(r); }
+
+    const trunc = (s: string, n: number) => s.length > n ? s.slice(0, n) + "..." : s;
+    let summary = `[현재: ${file.basename}]\n${trunc(useful, 2000)}\n\n`;
+    for (const d of depth1) summary += `[1단계: ${d.path}]\n${trunc(d.content, 500)}\n\n`;
+    for (const d of depth2) summary += `[2단계: ${d.path}]\n${trunc(d.content, 300)}\n\n`;
+
+    this.contextCache.set(file.path, summary);
+  }
+
+  private async executeConsoleCommand(command: string) {
     if (!command.trim()) { new Notice("명령을 입력해주세요"); return; }
 
     this.consoleSection.addClass("cw-hidden");
@@ -324,31 +419,67 @@ export class ClaudeWriterView extends ItemView {
     this.currentResult = "";
     this.activeCommand = "console";
 
-    // Build vault-aware system prompt
+    // ── Gather full context ──
     const vaultRoot = (this.app.vault as any).adapter?.basePath || "";
     const activeFile = this.app.workspace.getActiveFile();
     const activeFilePath = activeFile ? activeFile.path : "(없음)";
-    const context = this.contextCache.get(this.currentDocPath) || "";
 
-    const systemPrompt = `당신은 Obsidian 볼트 작업 전문가입니다. 사용자의 명령을 수행하세요.
+    // 1) Linked document context (from context cache)
+    const linkedContext = this.contextCache.get(this.currentDocPath) || "";
+
+    // 2) Current document full content (not just context cache snippet)
+    let docContent = "";
+    let docFrontmatter = "";
+    if (activeFile) {
+      try {
+        const raw = await this.app.vault.cachedRead(activeFile);
+        // Extract frontmatter
+        const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
+        if (fmMatch) docFrontmatter = fmMatch[1];
+        docContent = raw.length > 4000 ? raw.slice(0, 4000) + "\n...(중략)..." : raw;
+      } catch {}
+    }
+
+    // 3) Selection with surrounding context
+    const selection = this.currentSelection || this.getEditorSelection(true) || "";
+    let selectionPayload = "";
+    if (selection) {
+      selectionPayload = this.buildUserPayload(selection);
+    }
+
+    // ── Build rich system prompt ──
+    let systemPrompt = `당신은 Obsidian 볼트 작업 전문가입니다. 사용자의 명령을 수행하세요.
 
 현재 볼트 정보:
 - 볼트 경로: ${vaultRoot}
 - 열린 파일: ${activeFilePath}
 - 구조: GTD+PARA (00_Dashboard ~ 07_Resources)
+${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : ""}
 
 규칙:
 1. 문서 생성 요청 시: 완성된 마크다운 문서를 출력하세요. frontmatter 포함.
 2. 분석/검색 요청 시: 결과를 구조화된 마크다운으로 출력하세요.
 3. 수정 요청 시: 수정된 전체 내용을 출력하세요.
-4. 항상 한국어. 설명 없이 결과만.
-${context ? `\n[참고 맥락]\n${context}` : ""}`;
+4. 항상 한국어. 설명 없이 결과만.`;
 
-    // If there's a selection, include it
-    const selection = this.getEditorSelection(true);
-    let userText = command;
-    if (selection) {
-      userText = `[명령]\n${command}\n\n[선택된 텍스트]\n${selection}`;
+    if (linkedContext) {
+      systemPrompt += `\n\n[연결 문서 맥락]\n${linkedContext}`;
+    }
+
+    // ── Build user payload ──
+    let userText = `[명령]\n${command}`;
+
+    if (selectionPayload) {
+      userText += `\n\n[선택된 텍스트 + 주변 문맥]\n${selectionPayload}`;
+    }
+
+    if (docContent && !selectionPayload) {
+      // No selection → include full document for reference
+      userText += `\n\n[현재 문서 전체]\n${docContent}`;
+    } else if (docContent && selectionPayload) {
+      // Selection exists → include document as background (truncated)
+      const brief = docContent.length > 1500 ? docContent.slice(0, 1500) + "\n...(중략)..." : docContent;
+      userText += `\n\n[현재 문서 배경]\n${brief}`;
     }
 
     const handle = this.callClaudeAuto(
@@ -637,7 +768,12 @@ ${context ? `\n[참고 맥락]\n${context}` : ""}`;
     // ── Command Console ──
     this.consoleSection = c.createDiv("cw-console-section cw-hidden");
     this.consoleSection.createEl("div", { text: "⌨️ 커맨드 콘솔", cls: "cw-section-label" });
-    this.consoleInput = this.consoleSection.createEl("textarea", { cls: "cw-console-input", attr: { placeholder: "명령을 입력하세요...\n예: '회의록 새로 만들어줘' / '이 문서 요약해서 새 노트로' / '프로젝트 현황 정리'\nCtrl+Enter로 실행", rows: "4" } });
+    // Context status indicator
+    this.consoleContextStatus = this.consoleSection.createDiv({ cls: "cw-console-ctx" });
+    // Selection preview
+    this.consoleSelPreview = this.consoleSection.createDiv({ cls: "cw-console-sel-preview cw-hidden" });
+    // Input
+    this.consoleInput = this.consoleSection.createEl("textarea", { cls: "cw-console-input", attr: { placeholder: "명령을 입력하세요...\n예: '회의록 새로 만들어줘' / '이거 표로 정리해줘' / '영문 보고서로 변환'\nCtrl+Enter로 실행", rows: "4" } });
     const consoleActions = this.consoleSection.createDiv("cw-console-actions");
     consoleActions.createEl("button", { text: "▶ 실행", cls: "cw-btn cw-btn-primary" }).addEventListener("click", () => this.executeConsoleCommand(this.consoleInput.value));
     // Save row
