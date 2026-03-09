@@ -3,7 +3,7 @@
   "name": "Claude Writer",
   "version": "1.4.0",
   "minAppVersion": "1.5.0",
-  "description": "AI writing assistant powered by Claude Code CLI — rewrite, restructure, summarize, translate, explain, visualize, vault restructuring, and command console",
+  "description": "AI writing assistant powered by Claude Code CLI — rewrite, restructure, summarize, translate, explain, visualize, vault restructuring, and command console.",
   "author": "jasonmoon",
   "authorUrl": "https://jasonmoon.dev",
   "isDesktopOnly": false
