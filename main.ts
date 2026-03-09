@@ -1,4 +1,4 @@
-import { Plugin, Editor, MarkdownView, Notice, PluginSettingTab, Setting, Menu, Platform, requestUrl } from "obsidian";
+import { App, Plugin, Editor, PluginSettingTab, Setting, Menu, Platform, requestUrl } from "obsidian";
 import { ClaudeWriterView, VIEW_TYPE } from "./view";
 
 // ─── Template Prompts ────────────────────────────────
@@ -289,106 +289,53 @@ export const TONES: { id: string; label: string; desc: string; instruction: stri
   { id: "분석적", label: "분석", desc: "의사결정/분석", instruction: "논리적이고 구조적으로. 감정 배제, 근거 기반." },
 ];
 
-// ─── Helpers ─────────────────────────────────────────
-
-function getClaudeEnv(): Record<string, string | undefined> {
-  const env = { ...process.env };
-  delete env["CLAUDECODE"];
-  return env;
-}
-
-// ─── Auth ────────────────────────────────────────────
+// ─── Auth (Bridge-based) ────────────────────────────
 
 export interface AuthInfo { loggedIn: boolean; email: string; subscriptionType: string; }
 
-export function getAuthStatus(claudePath: string): Promise<AuthInfo> {
-  return new Promise((resolve) => {
-    const { spawn } = require("child_process");
-    const child = spawn(claudePath, ["auth", "status"], { shell: true, env: getClaudeEnv(), stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    child.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-    child.on("close", () => {
-      try {
-        const data = JSON.parse(stdout);
-        resolve({ loggedIn: data.loggedIn || false, email: data.email || "", subscriptionType: data.subscriptionType || "" });
-      } catch {
-        const isLoggedIn = stdout.includes("logged in") || stdout.includes("Logged in");
-        const emailMatch = stdout.match(/[\w.+-]+@[\w-]+\.[a-z]+/i);
-        resolve({ loggedIn: isLoggedIn, email: emailMatch?.[0] || "", subscriptionType: "" });
-      }
+export async function getAuthStatus(bridgeUrl: string): Promise<AuthInfo> {
+  try {
+    const resp = await requestUrl({
+      url: `${bridgeUrl}/auth/status`,
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
     });
-    child.on("error", () => resolve({ loggedIn: false, email: "", subscriptionType: "" }));
-  });
+    const data = resp.json;
+    return {
+      loggedIn: data.loggedIn || false,
+      email: data.email || "",
+      subscriptionType: data.subscriptionType || "",
+    };
+  } catch {
+    // Bridge not reachable
+    return { loggedIn: false, email: "", subscriptionType: "" };
+  }
 }
 
-export function claudeAuthLogout(claudePath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const { spawn } = require("child_process");
-    const child = spawn(claudePath, ["auth", "logout"], { shell: true, env: getClaudeEnv(), stdio: ["pipe", "pipe", "pipe"] });
-    child.on("close", (code: number) => code === 0 ? resolve() : reject(new Error(`exit ${code}`)));
-    child.on("error", reject);
+export async function claudeAuthLogout(bridgeUrl: string): Promise<void> {
+  const resp = await requestUrl({
+    url: `${bridgeUrl}/auth/logout`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
   });
+  const data = resp.json;
+  if (data.error) throw new Error(data.error);
 }
 
-export function claudeAuthLogin(claudePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const { spawn } = require("child_process");
-    const child = spawn(claudePath, ["auth", "login"], { shell: true, env: getClaudeEnv(), stdio: ["pipe", "pipe", "pipe"] });
-    let output = "";
-    child.stdout.on("data", (d: Buffer) => { output += d.toString(); });
-    child.stderr.on("data", (d: Buffer) => { output += d.toString(); });
-    const timer = setTimeout(() => { child.kill(); reject(new Error("로그인 타임아웃 (120초). 브라우저에서 로그인을 완료해주세요.")); }, 120000);
-    child.on("close", (code: number) => { clearTimeout(timer); code === 0 ? resolve(output) : reject(new Error(`Login failed (${code})\n${output}`)); });
-    child.on("error", (e: Error) => { clearTimeout(timer); reject(e); });
+export async function claudeAuthLogin(bridgeUrl: string): Promise<string> {
+  const resp = await requestUrl({
+    url: `${bridgeUrl}/auth/login`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
   });
+  const data = resp.json;
+  if (data.error) throw new Error(data.error);
+  return data.message || "Login initiated";
 }
 
 // ─── Claude Bridge ───────────────────────────────────
 
-export function callClaude(
-  claudePath: string, model: string, systemPrompt: string, userText: string, maxChars: number, tone: string,
-  onChunk: (chunk: string) => void, onDone: () => void, onError: (err: string) => void,
-  replaceMode = true,
-): { kill: () => void } {
-  const REPLACE_ONLY = `You are a text replacement tool. Rules:
-1. Output ONLY the replacement for the [대체 대상] section.
-2. Consider [앞 문맥] and [뒤 문맥] for tone, flow, and coherence — but NEVER output them.
-3. The result must read naturally when placed between the surrounding context.
-4. No preamble, no explanation, no code block wrapping. Raw replacement text only.`;
-  const EXPLAIN_MODE = `You are an expert educator. Explain the [대체 대상] text so the reader fully understands it.
-Use [앞 문맥] and [뒤 문맥] to understand the domain — but NEVER output them.
-Cover: background, core principles, relationships between components, and real-world implications.`;
-  const modePrefix = replaceMode ? REPLACE_ONLY : EXPLAIN_MODE;
-  const toneInst = tone && tone !== "auto" ? `\n[톤: ${TONES.find(t => t.id === tone)?.instruction || ""}]` : "";
-  const charLimit = maxChars > 0 ? `\n답변은 ${maxChars}자 이내로 제한.` : "";
-  const fullPrompt = `${modePrefix}\n\n${systemPrompt}${toneInst}${charLimit}\n\n---\n\n${userText}`;
-
-  const env = getClaudeEnv();
-  const { spawn } = require("child_process");
-  const timeoutMs = model === "opus" ? 180000 : model === "sonnet" ? 120000 : 60000;
-
-  const child = spawn(claudePath, ["-p", "--output-format", "text", "--model", model, "--no-session-persistence", "--effort", "low"], {
-    shell: true, env, stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  let stderr = "";
-  child.stdout.on("data", (d: Buffer) => onChunk(d.toString()));
-  child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-
-  const timer = setTimeout(() => { child.kill(); onError(`타임아웃 (${timeoutMs / 1000}초)`); }, timeoutMs);
-  child.on("close", (code: number) => { clearTimeout(timer); code !== 0 ? onError(`CLI 종료 ${code}: ${stderr}`) : onDone(); });
-  child.on("error", (err: Error) => { clearTimeout(timer); onError(`실행 오류: ${err.message}`); });
-
-  // Guard stdin
-  if (child.stdin) { child.stdin.write(fullPrompt); child.stdin.end(); }
-  else { clearTimeout(timer); child.kill(); onError("stdin not available"); }
-
-  return { kill: () => { clearTimeout(timer); child.kill(); } };
-}
-
-// ─── Mobile Bridge (Termux) ─────────────────────────
-
-export function callClaudeMobile(
+export function callClaudeBridge(
   bridgeUrl: string, model: string, systemPrompt: string, userText: string, maxChars: number, tone: string,
   onChunk: (chunk: string) => void, onDone: () => void, onError: (err: string) => void,
   replaceMode = true,
@@ -408,7 +355,7 @@ Cover: background, core principles, relationships between components, and real-w
 
   let aborted = false;
 
-  (async () => {
+  void (async () => {
     try {
       const resp = await requestUrl({
         url: `${bridgeUrl}/ask`,
@@ -424,8 +371,11 @@ Cover: background, core principles, relationships between components, and real-w
         onChunk(data.response || "");
         onDone();
       }
-    } catch (err: any) {
-      if (!aborted) onError(`Bridge 연결 실패: ${err.message}\nTermux에서 bridge.mjs가 실행 중인지 확인하세요.`);
+    } catch (err: unknown) {
+      if (!aborted) {
+        const message = err instanceof Error ? err.message : String(err);
+        onError(`Bridge 연결 실패: ${message}\nTermux에서 bridge.mjs가 실행 중인지 확인하세요.`);
+      }
     }
   })();
 
@@ -439,15 +389,11 @@ export function isMobile(): boolean {
 
 // ─── Template Detection ──────────────────────────────
 
-export function detectTemplate(app: any, filePath: string): string {
+export function detectTemplate(app: App, filePath: string): string {
   const file = app.vault.getAbstractFileByPath(filePath);
   if (!file) return "";
   const cache = app.metadataCache.getFileCache(file);
   return cache?.frontmatter?.template || "";
-}
-
-export function extractSectionHeaders(content: string): string[] {
-  return (content.match(/^##+ .+/gm) || []).slice(0, 15);
 }
 
 export function extractUsefulContent(content: string): string {
@@ -465,45 +411,53 @@ export default class ClaudeWriterPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new ClaudeWriterView(leaf, this));
-    this.addRibbonIcon("pen-tool", "Claude Writer", () => this.activateView());
+    this.addRibbonIcon("pen-tool", "Claude Writer", () => { void this.activateView(); });
 
     // Register editor commands
     for (const cmd of COMMANDS) {
       if (cmd.id === "vault-ops") {
         this.addCommand({
           id: cmd.id, name: cmd.name,
-          callback: async () => {
-            await this.activateView();
-            const view = this.getView();
-            if (view) view.triggerVaultOps();
+          callback: () => {
+            void (async () => {
+              await this.activateView();
+              const view = this.getView();
+              if (view) view.triggerVaultOps();
+            })();
           },
         });
       } else if (cmd.id === "console") {
         this.addCommand({
           id: cmd.id, name: cmd.name,
-          callback: async () => {
-            await this.activateView();
-            const view = this.getView();
-            if (view) view.triggerConsole();
+          callback: () => {
+            void (async () => {
+              await this.activateView();
+              const view = this.getView();
+              if (view) view.triggerConsole();
+            })();
           },
         });
       } else if (cmd.id === "answer-questions") {
         // answer-questions operates on the whole document, not a selection
         this.addCommand({
           id: cmd.id, name: cmd.name,
-          editorCallback: async (editor: Editor) => {
-            await this.activateView();
-            const view = this.getView();
-            if (view) view.triggerAnswerQuestions(editor);
+          editorCallback: (editor: Editor) => {
+            void (async () => {
+              await this.activateView();
+              const view = this.getView();
+              if (view) view.triggerAnswerQuestions(editor);
+            })();
           },
         });
       } else {
         this.addCommand({
           id: cmd.id, name: cmd.name,
-          editorCallback: async (editor: Editor) => {
-            await this.activateView();
-            const view = this.getView();
-            if (view) view.triggerCommand(cmd.id, editor.getSelection());
+          editorCallback: (editor: Editor) => {
+            void (async () => {
+              await this.activateView();
+              const view = this.getView();
+              if (view) view.triggerCommand(cmd.id, editor.getSelection());
+            })();
           },
         });
       }
@@ -519,11 +473,13 @@ export default class ClaudeWriterPlugin extends Plugin {
         for (const cmdId of quickCmds) {
           const cmd = COMMANDS.find(c => c.id === cmdId);
           if (!cmd) continue;
-          menu.addItem((item: any) => {
-            item.setTitle(`Claude: ${cmd.label}`).setIcon("pen-tool").onClick(async () => {
-              await this.activateView();
-              const view = this.getView();
-              if (view) view.triggerCommand(cmdId, sel);
+          menu.addItem((item) => {
+            item.setTitle(`Claude: ${cmd.label}`).setIcon("pen-tool").onClick(() => {
+              void (async () => {
+                await this.activateView();
+                const view = this.getView();
+                if (view) view.triggerCommand(cmdId, sel);
+              })();
             });
           });
         }
@@ -533,16 +489,13 @@ export default class ClaudeWriterPlugin extends Plugin {
     this.addSettingTab(new ClaudeWriterSettingTab(this.app, this));
   }
 
-  async onunload() {
+  onunload() {
     const view = this.getView();
     if (view) view.forceKill();
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE);
   }
 
-  getClaudePath(): string {
-    if (this.settings.claudePath) return this.settings.claudePath;
-    const home = process.env.USERPROFILE || process.env.HOME || "";
-    return process.platform === "win32" ? `${home}\\AppData\\Roaming\\npm\\claude.cmd` : "/usr/local/bin/claude";
+  getBridgeUrl(): string {
+    return this.settings.bridgeUrl || DEFAULT_SETTINGS.bridgeUrl;
   }
 
   getView(): ClaudeWriterView | null {
@@ -574,39 +527,39 @@ export default class ClaudeWriterPlugin extends Plugin {
 
 class ClaudeWriterSettingTab extends PluginSettingTab {
   plugin: ClaudeWriterPlugin;
-  constructor(app: any, plugin: ClaudeWriterPlugin) { super(app, plugin); this.plugin = plugin; }
+  constructor(app: App, plugin: ClaudeWriterPlugin) { super(app, plugin); this.plugin = plugin; }
 
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Claude Writer" });
+    new Setting(containerEl).setName("Claude Writer").setHeading();
 
-    new Setting(containerEl).setName("Claude CLI 경로").setDesc("비워두면 자동 감지")
+    new Setting(containerEl).setName("Claude CLI path").setDesc("Leave empty for auto-detect")
       .addText((t) => t.setPlaceholder("auto-detect").setValue(this.plugin.settings.claudePath)
-        .onChange(async (v) => { this.plugin.settings.claudePath = v; await this.plugin.saveSettings(); }));
+        .onChange((v) => { this.plugin.settings.claudePath = v; void this.plugin.saveSettings(); }));
 
-    new Setting(containerEl).setName("기본 모델")
-      .addDropdown((d) => d.addOption("haiku", "Haiku (빠름)").addOption("sonnet", "Sonnet (균형)").addOption("opus", "Opus (최고 품질)")
-        .setValue(this.plugin.settings.model).onChange(async (v) => { this.plugin.settings.model = v; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("Default model")
+      .addDropdown((d) => d.addOption("haiku", "Haiku (fast)").addOption("sonnet", "Sonnet (balanced)").addOption("opus", "Opus (best quality)")
+        .setValue(this.plugin.settings.model).onChange((v) => { this.plugin.settings.model = v; void this.plugin.saveSettings(); }));
 
-    new Setting(containerEl).setName("기본 톤")
+    new Setting(containerEl).setName("Default tone")
       .addDropdown((d) => { TONES.forEach(t => d.addOption(t.id, `${t.label} (${t.desc})`)); d.setValue(this.plugin.settings.tone)
-        .onChange(async (v) => { this.plugin.settings.tone = v; await this.plugin.saveSettings(); }); });
+        .onChange((v) => { this.plugin.settings.tone = v; void this.plugin.saveSettings(); }); });
 
-    new Setting(containerEl).setName("글자수 제한").setDesc("0 = 무제한")
+    new Setting(containerEl).setName("Character limit").setDesc("0 = unlimited")
       .addText((t) => t.setValue(String(this.plugin.settings.maxChars))
-        .onChange(async (v) => { this.plugin.settings.maxChars = parseInt(v) || 0; await this.plugin.saveSettings(); }));
+        .onChange((v) => { this.plugin.settings.maxChars = parseInt(v) || 0; void this.plugin.saveSettings(); }));
 
-    new Setting(containerEl).setName("모바일 Bridge URL").setDesc("Termux bridge.mjs 주소 (모바일 전용)")
+    new Setting(containerEl).setName("Mobile bridge URL").setDesc("Termux bridge.mjs address (mobile only)")
       .addText((t) => t.setPlaceholder("http://127.0.0.1:3456").setValue(this.plugin.settings.bridgeUrl)
-        .onChange(async (v) => { this.plugin.settings.bridgeUrl = v; await this.plugin.saveSettings(); }));
+        .onChange((v) => { this.plugin.settings.bridgeUrl = v; void this.plugin.saveSettings(); }));
 
-    containerEl.createEl("h3", { text: "템플릿별 프롬프트 (자동 감지)" });
-    containerEl.createEl("p", { text: "frontmatter의 template 필드를 기반으로 자동 적용됩니다.", cls: "setting-item-description" });
+    new Setting(containerEl).setName("Template prompts (auto-detect)").setHeading();
+    containerEl.createEl("p", { text: "Automatically applied based on the template field in frontmatter.", cls: "setting-item-description" });
 
     for (const [name, def] of Object.entries(TEMPLATE_PROMPTS)) {
       new Setting(containerEl).setName(name).setDesc(`모델: ${def.model} | 톤: ${def.tone}`)
-        .addTextArea((t) => t.setValue(def.prompt).onChange(async (v) => { TEMPLATE_PROMPTS[name].prompt = v; }));
+        .addTextArea((t) => t.setValue(def.prompt).onChange((v) => { TEMPLATE_PROMPTS[name].prompt = v; }));
     }
   }
 }

@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, MarkdownView, Notice } from "obsidian";
 import type ClaudeWriterPlugin from "./main";
-import { callClaude, callClaudeMobile, isMobile, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractSectionHeaders, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions, type SavedCommand } from "./main";
-import type { CmdDef } from "./main";
+import { callClaudeBridge, getAuthStatus, claudeAuthLogout, claudeAuthLogin, detectTemplate, extractUsefulContent, COMMANDS, TONES, EXPLAIN_LEVELS, VIZ_SUGGEST_PROMPT, VIZ_GENERATE_PROMPT, ANSWER_QUESTION_PROMPT, parseQuestions, TEMPLATE_PROMPTS } from "./main";
+
 import { scanVaultStructure, simulateMigration, runFullMigration, type MigrationPhase } from "./vault-ops";
 
 export const VIEW_TYPE = "claude-writer-view";
@@ -61,9 +61,9 @@ export class ClaudeWriterView extends ItemView {
   private isExplainMode = false;
   private isVizMode = false;
   private killProcess: (() => void) | null = null;
-  private lastEditor: { editor: any; leaf: WorkspaceLeaf } | null = null;
-  private savedFrom: any = null;
-  private savedTo: any = null;
+  private lastEditor: { editor: Editor; leaf: WorkspaceLeaf } | null = null;
+  private savedFrom: EditorPosition | null = null;
+  private savedTo: EditorPosition | null = null;
   private contextCache = new LRUCache<string, string>(20);
   private currentDocPath = "";
   private currentTemplate = "";
@@ -89,7 +89,7 @@ export class ClaudeWriterView extends ItemView {
   async onOpen() {
     this.buildUI();
     this.setState("idle");
-    this.refreshAuth();
+    void this.refreshAuth();
 
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
       if (leaf && leaf.view instanceof MarkdownView) {
@@ -149,32 +149,28 @@ export class ClaudeWriterView extends ItemView {
     this.executeCommand(cmdId);
   }
 
-  /** Route to desktop CLI or mobile bridge */
+  /** Route all Claude calls through the HTTP bridge */
   private callClaudeAuto(
     model: string, systemPrompt: string, userText: string, maxChars: number, tone: string,
     onChunk: (chunk: string) => void, onDone: () => void, onError: (err: string) => void,
     replaceMode = true,
   ): { kill: () => void } {
-    if (isMobile()) {
-      return callClaudeMobile(
-        this.plugin.settings.bridgeUrl, model, systemPrompt, userText, maxChars, tone,
-        onChunk, onDone, onError, replaceMode,
-      );
-    }
-    return callClaude(
-      this.plugin.getClaudePath(), model, systemPrompt, userText, maxChars, tone,
+    return callClaudeBridge(
+      this.plugin.getBridgeUrl(), model, systemPrompt, userText, maxChars, tone,
       onChunk, onDone, onError, replaceMode,
     );
   }
 
   /** Find a markdown editor — prefer lastEditor, fallback to workspace scan */
-  private findMarkdownEditor(): any | null {
+  private findMarkdownEditor(): Editor | null {
     // 1. Use tracked lastEditor (set by active-leaf-change)
     if (this.lastEditor) {
       try {
         const ed = this.lastEditor.editor;
         if (ed && typeof ed.getValue === "function") return ed;
-      } catch {}
+      } catch {
+        // Editor reference stale, continue to fallback
+      }
     }
     // 2. Fallback: find any open MarkdownView
     const active = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -184,7 +180,7 @@ export class ClaudeWriterView extends ItemView {
     }
     // 3. Scan all leaves
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      const view = leaf.view as any;
+      const view = leaf.view as MarkdownView;
       if (view?.editor) {
         this.lastEditor = { editor: view.editor, leaf };
         return view.editor;
@@ -250,7 +246,7 @@ export class ClaudeWriterView extends ItemView {
 
     // Execute button
     const execBtn = btnRow.createEl("button", { text: "🚀 대수술 실행", cls: "cw-btn cw-btn-primary" });
-    execBtn.addEventListener("click", async () => {
+    execBtn.addEventListener("click", () => {
       execBtn.disabled = true;
       simBtn.disabled = true;
 
@@ -263,7 +259,7 @@ export class ClaudeWriterView extends ItemView {
 
       this.setState("processing");
 
-      const result = await runFullMigration(
+      void runFullMigration(
         this.app,
         (phase: MigrationPhase, msg: string) => {
           phaseEl.setText(`[${phase}] ${msg}`);
@@ -273,28 +269,28 @@ export class ClaudeWriterView extends ItemView {
         },
         (current: number, total: number, file: string) => {
           const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-          bar.style.width = `${pct}%`;
+          bar.setCssProps({ "--progress-width": `${pct}%` });
           fileEl.setText(`${current}/${total}: ${file.split("/").pop()}`);
         },
         (errMsg: string) => {
           logEl.createEl("p", { text: `❌ ${errMsg}`, cls: "cw-vault-error" });
         },
-      );
+      ).then((result) => {
+        bar.setCssProps({ "--progress-width": "100%" });
+        this.setState("done");
 
-      bar.style.width = "100%";
-      this.setState("done");
+        // Summary
+        const summaryDiv = container.createDiv({ cls: "cw-vault-summary" });
+        summaryDiv.createEl("h4", { text: "✅ 마이그레이션 완료" });
+        summaryDiv.createEl("p", { text: `폴더 생성: ${result.foldersCreated}개` });
+        summaryDiv.createEl("p", { text: `파일 이동: ${result.filesMoved}개` });
+        summaryDiv.createEl("p", { text: `링크 수정: ${result.linksUpdated}개` });
+        if (result.errors.length > 0) {
+          summaryDiv.createEl("p", { text: `오류: ${result.errors.length}건`, cls: "cw-vault-error" });
+        }
 
-      // Summary
-      const summaryDiv = container.createDiv({ cls: "cw-vault-summary" });
-      summaryDiv.createEl("h4", { text: "✅ 마이그레이션 완료" });
-      summaryDiv.createEl("p", { text: `폴더 생성: ${result.foldersCreated}개` });
-      summaryDiv.createEl("p", { text: `파일 이동: ${result.filesMoved}개` });
-      summaryDiv.createEl("p", { text: `링크 수정: ${result.linksUpdated}개` });
-      if (result.errors.length > 0) {
-        summaryDiv.createEl("p", { text: `오류: ${result.errors.length}건`, cls: "cw-vault-error" });
-      }
-
-      new Notice(`Vault Ops 완료! ${result.filesMoved}개 파일 이동, ${result.linksUpdated}개 링크 수정`);
+        new Notice(`Vault Ops 완료! ${result.filesMoved}개 파일 이동, ${result.linksUpdated}개 링크 수정`);
+      });
     });
   }
 
@@ -331,7 +327,7 @@ export class ClaudeWriterView extends ItemView {
     }
 
     // ── Context status ──
-    this.updateConsoleContextStatus();
+    void this.updateConsoleContextStatus();
   }
 
   private async updateConsoleContextStatus() {
@@ -363,13 +359,14 @@ export class ClaudeWriterView extends ItemView {
         this.consoleContextStatus.className = "cw-console-ctx cw-console-ctx-ready";
       }
     } catch {
+      // Context scan failed, use document content only
       this.consoleContextStatus.setText(`📄 ${file.basename} — 맥락 파악 실패 (문서 내용만 사용)`);
       this.consoleContextStatus.className = "cw-console-ctx cw-console-ctx-none";
     }
   }
 
   /** Silent context scan — same as scanContext but without UI banners */
-  private async scanContextSilent(file: any): Promise<void> {
+  private async scanContextSilent(file: TFile): Promise<void> {
     const content = await this.app.vault.cachedRead(file);
     const useful = extractUsefulContent(content);
     const links1 = this.extractLinks(content);
@@ -420,7 +417,7 @@ export class ClaudeWriterView extends ItemView {
     this.activeCommand = "console";
 
     // ── Gather full context ──
-    const vaultRoot = (this.app.vault as any).adapter?.basePath || "";
+    const vaultRoot = (this.app.vault as VaultWithAdapter).adapter?.basePath || "";
     const activeFile = this.app.workspace.getActiveFile();
     const activeFilePath = activeFile ? activeFile.path : "(없음)";
 
@@ -437,7 +434,9 @@ export class ClaudeWriterView extends ItemView {
         const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
         if (fmMatch) docFrontmatter = fmMatch[1];
         docContent = raw.length > 4000 ? raw.slice(0, 4000) + "\n...(중략)..." : raw;
-      } catch {}
+      } catch {
+        // File read failed, proceed without document content
+      }
     }
 
     // 3) Selection with surrounding context
@@ -535,14 +534,14 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       const delBtn = item.createEl("button", { text: "×", cls: "cw-console-saved-del" });
       delBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this.deleteConsoleCommand(cmd.name);
+        void this.deleteConsoleCommand(cmd.name);
       });
     }
   }
 
   // ─── Answer Questions (EPUB++ integration) ──────
 
-  triggerAnswerQuestions(editor: any) {
+  triggerAnswerQuestions(editor: Editor) {
     if (this.state === "processing") { new Notice("이미 처리 중입니다"); return; }
 
     const content = editor.getValue();
@@ -569,11 +568,11 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     this.inputSection.addClass("cw-hidden");
     this.setState("processing");
 
-    this.executeAnswerQuestions(editor, unanswered, title, author);
+    void this.executeAnswerQuestions(editor, unanswered, title, author);
   }
 
   private async executeAnswerQuestions(
-    editor: any,
+    editor: Editor,
     unanswered: { lineIndex: number; question: string; passage: string }[],
     title: string,
     author: string,
@@ -601,9 +600,10 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
         // Insert after the ❓ line
         const lineText = editor.getLine(q.lineIndex);
         editor.replaceRange(block, { line: q.lineIndex, ch: lineText.length });
-      } catch (err: any) {
+      } catch (err: unknown) {
         failed++;
-        const errorBlock = `\n> [!warning]- ⚠️ AI 응답 실패\n> ${err.message || err}`;
+        const message = err instanceof Error ? err.message : String(err);
+        const errorBlock = `\n> [!warning]- ⚠️ AI 응답 실패\n> ${message}`;
         const lineText = editor.getLine(q.lineIndex);
         editor.replaceRange(errorBlock, { line: q.lineIndex, ch: lineText.length });
       }
@@ -662,11 +662,11 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     for (const tone of TONES) {
       const btn = toneBar.createEl("button", { text: tone.label, cls: "cw-tone-btn", attr: { title: tone.desc } });
       if (this.plugin.settings.tone === tone.id) btn.addClass("cw-tone-active");
-      btn.addEventListener("click", async () => {
+      btn.addEventListener("click", () => {
         this.toneBtns.forEach(b => b.removeClass("cw-tone-active"));
         btn.addClass("cw-tone-active");
         this.plugin.settings.tone = tone.id;
-        await this.plugin.saveSettings();
+        void this.plugin.saveSettings();
       });
       this.toneBtns.set(tone.id, btn);
     }
@@ -678,9 +678,9 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       this.modelSelect.createEl("option", { text: m.l, attr: { value: m.v } });
     }
     this.modelSelect.value = this.plugin.settings.model;
-    this.modelSelect.addEventListener("change", async () => {
+    this.modelSelect.addEventListener("change", () => {
       this.plugin.settings.model = this.modelSelect.value;
-      await this.plugin.saveSettings();
+      void this.plugin.saveSettings();
     });
 
     // ── Context banner ──
@@ -688,7 +688,7 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     const bannerText = this.contextBanner.createDiv("cw-context-banner-text");
     const bannerActions = this.contextBanner.createDiv("cw-context-banner-actions");
     bannerActions.createEl("button", { text: "허락", cls: "cw-btn cw-btn-xs cw-btn-primary" })
-      .addEventListener("click", () => this.scanContext());
+      .addEventListener("click", () => { void this.scanContext(); });
     bannerActions.createEl("button", { text: "건너뛰기", cls: "cw-btn cw-btn-xs" })
       .addEventListener("click", () => this.contextBanner.addClass("cw-hidden"));
     this.contextInfo = c.createDiv("cw-context-info cw-hidden");
@@ -780,16 +780,16 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     // Input
     this.consoleInput = this.consoleSection.createEl("textarea", { cls: "cw-console-input", attr: { placeholder: "명령을 입력하세요...\n예: '회의록 새로 만들어줘' / '이거 표로 정리해줘' / '영문 보고서로 변환'\nCtrl+Enter로 실행", rows: "4" } });
     const consoleActions = this.consoleSection.createDiv("cw-console-actions");
-    consoleActions.createEl("button", { text: "▶ 실행", cls: "cw-btn cw-btn-primary" }).addEventListener("click", () => this.executeConsoleCommand(this.consoleInput.value));
+    consoleActions.createEl("button", { text: "▶ 실행", cls: "cw-btn cw-btn-primary" }).addEventListener("click", () => { void this.executeConsoleCommand(this.consoleInput.value); });
     // Save row
     const saveRow = consoleActions.createDiv("cw-console-save-row");
     this.consoleSaveNameInput = saveRow.createEl("input", { cls: "cw-console-save-name", attr: { placeholder: "커맨드 이름", type: "text" } });
     saveRow.createEl("button", { text: "💾 저장", cls: "cw-btn cw-btn-xs" }).addEventListener("click", () => {
-      this.saveConsoleCommand(this.consoleSaveNameInput.value, this.consoleInput.value);
+      void this.saveConsoleCommand(this.consoleSaveNameInput.value, this.consoleInput.value);
       this.consoleSaveNameInput.value = "";
     });
     consoleActions.createEl("button", { text: "닫기", cls: "cw-btn" }).addEventListener("click", () => { this.consoleSection.addClass("cw-hidden"); this.setState("idle"); });
-    this.consoleInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.executeConsoleCommand(this.consoleInput.value); } });
+    this.consoleInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void this.executeConsoleCommand(this.consoleInput.value); } });
     // Saved commands list
     this.consoleSection.createEl("div", { text: "저장된 커맨드", cls: "cw-section-label cw-console-saved-label" });
     this.consoleSavedList = this.consoleSection.createDiv("cw-console-saved-list");
@@ -817,9 +817,9 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     this.applyBtn.addEventListener("click", () => this.applyResult());
     this.insertBelowBtn.addEventListener("click", () => this.insertBelow());
     this.insertCalloutBtn.addEventListener("click", () => this.insertAsCallout());
-    this.insertLinkBtn.addEventListener("click", () => this.insertAsLinkedNote());
+    this.insertLinkBtn.addEventListener("click", () => { void this.insertAsLinkedNote(); });
     this.appendBtn.addEventListener("click", () => this.appendResult());
-    this.copyBtn.addEventListener("click", () => { navigator.clipboard.writeText(this.currentResult); new Notice("클립보드에 복사됨"); });
+    this.copyBtn.addEventListener("click", () => { void navigator.clipboard.writeText(this.currentResult); new Notice("클립보드에 복사됨"); });
     this.dismissBtn.addEventListener("click", () => { this.setState("idle"); new Notice("결과 닫힘 — 원문 유지"); });
     this.cancelBtn.addEventListener("click", () => { this.forceKill(); this.setState("idle"); });
     this.retryBtn.addEventListener("click", () => { if (this.isExplainMode) this.explainRow.removeClass("cw-hidden"); else this.executeCommand(this.activeCommand); });
@@ -830,9 +830,9 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     this.accountPlanEl = accountSummary.createEl("span", { text: "", cls: "cw-account-plan" });
 
     const accountBody = accountDetails.createDiv("cw-account-body");
-    accountBody.createEl("button", { text: "↻ 새로고침", cls: "cw-btn cw-btn-xs" }).addEventListener("click", () => this.refreshAuth());
-    accountBody.createEl("button", { text: "로그아웃", cls: "cw-btn cw-btn-xs" }).addEventListener("click", () => this.handleLogout());
-    accountBody.createEl("button", { text: "로그인", cls: "cw-btn cw-btn-xs cw-btn-primary" }).addEventListener("click", () => this.handleLogin());
+    accountBody.createEl("button", { text: "↻ 새로고침", cls: "cw-btn cw-btn-xs" }).addEventListener("click", () => { void this.refreshAuth(); });
+    accountBody.createEl("button", { text: "로그아웃", cls: "cw-btn cw-btn-xs" }).addEventListener("click", () => { void this.handleLogout(); });
+    accountBody.createEl("button", { text: "로그인", cls: "cw-btn cw-btn-xs cw-btn-primary" }).addEventListener("click", () => { void this.handleLogin(); });
   }
 
   // ─── Template Detection ──────────────────────────
@@ -849,7 +849,6 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       this.templateBadge.setText(`📋 ${this.currentTemplate}`);
       // Auto-switch tone if "auto"
       if (this.plugin.settings.tone === "auto") {
-        const { TEMPLATE_PROMPTS } = require("./main");
         const tpl = TEMPLATE_PROMPTS[this.currentTemplate];
         if (tpl) {
           this.toneBtns.forEach(b => b.removeClass("cw-tone-active"));
@@ -867,7 +866,7 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     if (!this.contextCache.has(file.path)) {
       this.contextBanner.removeClass("cw-hidden");
       const textEl = this.contextBanner.querySelector(".cw-context-banner-text");
-      if (textEl) textEl.setText(`📄 "${file.basename}" — 맥락을 파악하시겠습니까?`);
+      if (textEl) (textEl as HTMLElement).setText(`📄 "${file.basename}" — 맥락을 파악하시겠습니까?`);
     } else {
       this.contextBanner.addClass("cw-hidden");
       this.showContextInfo(file.path);
@@ -952,8 +951,9 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       this.contextCache.set(targetPath, summary);
       const total = 1 + depth1.length + depth2.length + depth3.length;
       this.contextInfo.setText(`✅ 맥락 파악 완료 (100%) — ${depth1.length}(1단계) + ${depth2.length}(2단계) + ${depth3.length}(3단계) = 총 ${total}개`);
-    } catch (err: any) {
-      this.contextInfo.setText(`❌ 실패: ${err.message}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.contextInfo.setText(`❌ 실패: ${message}`);
     }
   }
 
@@ -983,7 +983,12 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       if (sel) { this.lastEditor = { editor: active.editor, leaf: active.leaf }; return sel; }
     }
     if (this.lastEditor) {
-      try { const sel = this.lastEditor.editor.getSelection(); if (sel) return sel; } catch {}
+      try {
+        const sel = this.lastEditor.editor.getSelection();
+        if (sel) return sel;
+      } catch {
+        // Editor reference stale
+      }
     }
     const leaves = this.app.workspace.getLeavesOfType("markdown");
     for (const leaf of leaves) {
@@ -992,7 +997,9 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       try {
         const sel = v.editor.getSelection();
         if (sel) { this.lastEditor = { editor: v.editor, leaf }; return sel; }
-      } catch {}
+      } catch {
+        // Editor reference stale
+      }
     }
     return null;
   }
@@ -1028,6 +1035,7 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       if (after) payload += `\n\n[뒤 문맥]\n${after}`;
       return payload;
     } catch {
+      // Failed to build context payload
       return selection;
     }
   }
@@ -1160,8 +1168,9 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
       this.outputSection.addClass("cw-hidden");
       this.vizRow.removeClass("cw-hidden");
       this.setState("idle");
-    } catch (err: any) {
-      this.outputContent.setText(`추천 파싱 실패: ${err.message}\n\n원본:\n${this.currentResult}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.outputContent.setText(`추천 파싱 실패: ${message}\n\n원본:\n${this.currentResult}`);
       this.setState("error");
     }
   }
@@ -1231,16 +1240,14 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     const { prompt, model, tone } = this.plugin.getEffectivePrompt(cmdId, this.currentTemplate);
 
     // For reconstruct, append section headers from current doc
-    let finalPrompt = prompt;
+    const finalPrompt = prompt;
     if (cmdId === "reconstruct" && this.currentDocPath) {
       const file = this.app.workspace.getActiveFile();
       if (file) {
-        // We can't await here but cachedRead is sync-ish via cache
+        // Check metadata cache for section headers
         const cached = this.app.metadataCache.getFileCache(file);
-        if (cached) {
-          const content = (this.app.vault as any).cache?.[file.path] || "";
-          // Get section headers from existing content
-        }
+        // cached is used for potential future header extraction
+        void cached;
       }
     }
 
@@ -1348,8 +1355,9 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
         editor.replaceRange(` [[${noteName}]]`, { line: insertLine, ch: lineText.length });
       }
       new Notice(`새 노트 생성 + 링크 삽입: ${noteName}`);
-    } catch (err: any) {
-      new Notice(`실패: ${err.message}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      new Notice(`실패: ${message}`);
     }
     this.setState("idle");
   }
@@ -1360,7 +1368,7 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     this.accountEmailEl.setText("확인 중...");
     this.accountPlanEl.setText("");
     try {
-      const info = await getAuthStatus(this.plugin.getClaudePath());
+      const info = await getAuthStatus(this.plugin.getBridgeUrl());
       if (info.loggedIn) {
         this.accountEmailEl.setText(info.email);
         this.accountPlanEl.setText(info.subscriptionType.toUpperCase());
@@ -1370,25 +1378,32 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
         this.accountPlanEl.className = "cw-account-plan";
       }
     } catch {
+      // Auth check failed
       this.accountEmailEl.setText("확인 실패");
     }
   }
 
   private async handleLogout() {
     try {
-      await claudeAuthLogout(this.plugin.getClaudePath());
+      await claudeAuthLogout(this.plugin.getBridgeUrl());
       new Notice("로그아웃 완료");
-      this.refreshAuth();
-    } catch (err: any) { new Notice(`실패: ${err.message}`); }
+      void this.refreshAuth();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      new Notice(`실패: ${message}`);
+    }
   }
 
   private async handleLogin() {
     new Notice("브라우저에서 로그인 페이지가 열립니다...");
     try {
-      await claudeAuthLogin(this.plugin.getClaudePath());
+      await claudeAuthLogin(this.plugin.getBridgeUrl());
       new Notice("로그인 성공!");
-      this.refreshAuth();
-    } catch (err: any) { new Notice(`실패: ${err.message}`); }
+      void this.refreshAuth();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      new Notice(`실패: ${message}`);
+    }
   }
 
   // ─── State ───────────────────────────────────────
@@ -1399,8 +1414,8 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
     b.empty(); b.className = "cw-status-badge";
     const ar = this.outputSection.querySelector(".cw-action-row") as HTMLElement;
 
-    const hide = (el: HTMLElement) => el.style.display = "none";
-    const show = (el: HTMLElement) => el.style.display = "";
+    const hide = (el: HTMLElement) => el.addClass("cw-hidden-inline");
+    const show = (el: HTMLElement) => el.removeClass("cw-hidden-inline");
 
     switch (s) {
       case "idle":
@@ -1438,4 +1453,12 @@ ${docFrontmatter ? `- 문서 메타: ${docFrontmatter.replace(/\n/g, " | ")}` : 
         break;
     }
   }
+}
+
+// ─── Type helpers for internal Obsidian APIs ────────
+
+import type { Editor, EditorPosition, TFile } from "obsidian";
+
+interface VaultWithAdapter {
+  adapter?: { basePath?: string };
 }

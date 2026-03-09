@@ -1,4 +1,4 @@
-import { App, TFile, TFolder, Notice, Vault } from "obsidian";
+import { App, TFile, TFolder, Notice } from "obsidian";
 
 // ─── Folder Structure Definitions ────────────────────
 
@@ -181,9 +181,10 @@ export async function migrateFiles(
 
         await vault.rename(file, newPath);
         moved++;
-      } catch (e: any) {
+      } catch (e: unknown) {
         errors++;
-        onError(`이동 실패: ${file.path} → ${newPath}: ${e.message}`);
+        const message = e instanceof Error ? e.message : String(e);
+        onError(`이동 실패: ${file.path} → ${newPath}: ${message}`);
       }
     }
   }
@@ -203,9 +204,10 @@ export async function migrateFiles(
           await vault.rename(file, newPath);
           moved++;
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         errors++;
-        onError(`Inbox 이동 실패: ${file.path}: ${e.message}`);
+        const message = e instanceof Error ? e.message : String(e);
+        onError(`Inbox 이동 실패: ${file.path}: ${message}`);
       }
     }
   }
@@ -662,9 +664,10 @@ export async function runFullMigration(
     onPhase("verifying", `검증 완료: GTD 폴더 ${postScan.gtdFolders.length}개 확인`);
 
     onPhase("done", `완료! 폴더 ${foldersCreated}개 생성, 파일 ${filesMoved}개 이동, 링크 ${linksUpdated}개 수정`);
-  } catch (e: any) {
-    errors.push(e.message);
-    onPhase("error", `오류: ${e.message}`);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    errors.push(message);
+    onPhase("error", `오류: ${message}`);
   }
 
   return { foldersCreated, filesMoved, linksUpdated, errors };
